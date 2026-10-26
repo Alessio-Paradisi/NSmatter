@@ -12,3 +12,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.npz
+__pycache__/
+.venv/
+.pytest_cache/
+*.npz
