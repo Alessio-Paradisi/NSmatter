@@ -1,10 +1,13 @@
 """Slater determinant of spin-isospin plane-wave orbitals.
 
 The occupied orbitals are plane waves exp(i k . r) with fixed spin and
-isospin labels, filled in closed shells for each of the four species.
+isospin, filled in closed shells for each of the four species.
 The determinant is built over all N particles, so that Psi depends on the
-labels s, t: the spin-isospin operators of the potential need Psi at
-configurations with labels swapped between particles.
+spin and isospin coordinates: the spin-isospin operators of the potential
+need Psi at configurations with labels swapped or replaced.
+
+Spins can be discrete labels (+1/-1) or spinors xi = (xi_up, xi_down)
+(see spin.py); Psi is linear in each spinor.
 
 It is the exact ground state of the free Fermi gas in the box, with energy
 E = hbar^2/2m * sum over occupied k of |k|^2.
@@ -15,21 +18,21 @@ import numpy as np
 
 from ..constants import HBAR2_2M
 from ..geometry import occupied_kvectors
-from ..system import System
 from ..spin import as_spinors
+from ..system import System
 
 
 def make_slater(system: System):
     """Single N x N determinant of spin-isospin plane-wave orbitals.
 
-    Orbital a: phi_a(r, s, t) = exp(i k_a . r) * [s == s_a] * [t == t_a].
-    Matrix element M[a, j] = phi_a(r_j, s_j, t_j): nonzero only where the
-    labels of particle j match those of orbital a.
+    Orbital a: phi_a(r, xi, t) = exp(i k_a . r) * (component of xi along the
+    orbital's spin) * [t == t_a].
+    Matrix element M[a, j] = phi_a(r_j, xi_j, t_j).
 
-    - labels in species order (normal sampling): M is block diagonal and
+    - labels in species order (normal case): M is block diagonal and
       det M = product of the four per-species determinants;
-    - swapped labels (inside the local energy): the blocks rearrange and
-      det M is the amplitude of that spin-isospin configuration;
+    - swapped labels or general spinors: det M is the amplitude of that
+      spin-isospin configuration;
     - labels with the wrong composition: an empty row, det M = 0.
     Returns (params, log_psi).
     """
@@ -51,20 +54,22 @@ def make_slater(system: System):
     # No variational parameters; kept so all ansatze share one interface.
     params = {}
 
-       def log_psi(params, r, s, t):
-           xi = as_spinors(s)  # (N, 2): labels or spinors
-           plane = jnp.exp(1j * (k @ r.T))
-           # Spin factor of orbital a for particle j: the component of xi_j
-           # along the orbital's spin (1 or 0 for discrete labels).
-           spin = xi[:, spin_index].T  # (orbitals, particles)
-           iso = t_orb[:, None] == t[None, :]
-           mat = jnp.where(iso, plane * spin, 0.0)
-           sign, logabs = jnp.linalg.slogdet(mat)
-           return logabs + jnp.log(sign)
-
+    def log_psi(params, r, s, t):
+        xi = as_spinors(s)  # (N, 2): labels or spinors
+        # Plane-wave part for every (orbital, particle) pair, shape (N, N).
+        plane = jnp.exp(1j * (k @ r.T))
+        # Spin factor of orbital a for particle j: the component of xi_j
+        # along the orbital's spin (1 or 0 for discrete labels).
+        spin = xi[:, spin_index].T  # (orbitals, particles)
+        # Isospin: particle j must carry the isospin of orbital a.
+        iso = t_orb[:, None] == t[None, :]
+        mat = jnp.where(iso, plane * spin, 0.0)
+        # ln det without overflow; ln(sign) carries the phase.
+        # At a node (Psi = 0) logabs = -inf: those configurations have zero weight.
+        sign, logabs = jnp.linalg.slogdet(mat)
+        return logabs + jnp.log(sign)
 
     return params, log_psi
-
 
 
 # -----------------------------------------------------------------------------
