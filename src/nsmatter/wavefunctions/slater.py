@@ -1,13 +1,13 @@
-"""Slater determinant of plane waves, one determinant per species.
+"""Slater determinant of spin-isospin plane-wave orbitals.
 
-With fixed labels, the Slater determinant of spin-isospin orbitals
-factorizes into a product of determinants, one per populated species:
+The occupied orbitals are plane waves exp(i k . r) with fixed spin and
+isospin labels, filled in closed shells for each of the four species.
+The determinant is built over all N particles, so that Psi depends on the
+labels s, t: the spin-isospin operators of the potential need Psi at
+configurations with labels swapped between particles.
 
-    Psi(R) = prod over species of det[ exp(i k_a . r_j) ]
-
-with a running over the occupied momenta and j over the particles of that
-species. It is the exact ground state of the free Fermi gas in the box,
-with energy E = hbar^2/2m * sum over occupied k of |k|^2.
+It is the exact ground state of the free Fermi gas in the box, with energy
+E = hbar^2/2m * sum over occupied k of |k|^2.
 """
 
 import jax.numpy as jnp
@@ -19,40 +19,49 @@ from ..system import System
 
 
 def make_slater(system: System):
-    """Build the plane-wave Slater determinant for `system`.
+    """Single N x N determinant of spin-isospin plane-wave orbitals.
 
-    Returns (params, log_psi). Everything that does not change during the
-    simulation (which particles belong to which species, their momenta)
-    is computed here once and captured by log_psi.
+    Orbital a: phi_a(r, s, t) = exp(i k_a . r) * [s == s_a] * [t == t_a].
+    Matrix element M[a, j] = phi_a(r_j, s_j, t_j): nonzero only where the
+    labels of particle j match those of orbital a.
+
+    - labels in species order (normal sampling): M is block diagonal and
+      det M = product of the four per-species determinants;
+    - swapped labels (inside the local energy): the blocks rearrange and
+      det M is the amplitude of that spin-isospin configuration;
+    - labels with the wrong composition: an empty row, det M = 0.
+    Returns (params, log_psi).
     """
     L = system.box_length
 
-    # For each populated species keep (index slice, occupied k-vectors).
-    # Empty species are skipped: they contribute a factor 1.
-    blocks = []
-    for sl, count in zip(system.species_slices, system.counts):
+    # Orbitals of every populated species, in species order:
+    # momentum, spin label and isospin label of each orbital.
+    ks, so, to = [], [], []
+    for count, sz, tz in zip(system.counts, (1, -1, 1, -1), (-1, -1, 1, 1)):
         if count > 0:
-            blocks.append((sl, jnp.asarray(occupied_kvectors(count, L))))
+            ks.append(occupied_kvectors(count, L))
+            so += [sz] * count
+            to += [tz] * count
+    k = jnp.asarray(np.concatenate(ks))  # (N, 3) momenta
+    s_orb = jnp.asarray(so)  # (N,) spin of each orbital
+    t_orb = jnp.asarray(to)  # (N,) isospin of each orbital
 
-    # No variational parameters yet; kept so all ansatze share one interface.
+    # No variational parameters; kept so all ansatze share one interface.
     params = {}
 
     def log_psi(params, r, s, t):
-        # Accumulate ln Psi as a sum of ln det over species (product -> sum).
-        total = jnp.zeros((), dtype=jnp.complex128)
-        for sl, k in blocks:
-            # Phase matrix k_a . r_j, shape (n_orbitals, n_particles):
-            # rows = orbitals, columns = particles of this species.
-            phases = k @ r[sl].T
-            mat = jnp.exp(1j * phases)
-            # slogdet returns (sign, ln|det|) without overflow or underflow.
-            # For a complex matrix, `sign` is a complex number of modulus 1
-            # (or 0 at a node); ln(sign) = i * phase.
-            sign, logabs = jnp.linalg.slogdet(mat)
-            total = total + logabs + jnp.log(sign)
-        return total
+        # Plane-wave part for every (orbital, particle) pair, shape (N, N).
+        plane = jnp.exp(1j * (k @ r.T))
+        # True where particle j carries the labels of orbital a.
+        match = (s_orb[:, None] == s[None, :]) & (t_orb[:, None] == t[None, :])
+        mat = jnp.where(match, plane, 0.0)
+        # ln det without overflow; ln(sign) carries the phase.
+        # At a node (Psi = 0) logabs = -inf: those configurations have zero weight.
+        sign, logabs = jnp.linalg.slogdet(mat)
+        return logabs + jnp.log(sign)
 
     return params, log_psi
+
 
 
 # -----------------------------------------------------------------------------
