@@ -16,6 +16,7 @@ import numpy as np
 from ..constants import HBAR2_2M
 from ..geometry import occupied_kvectors
 from ..system import System
+from ..spin import as_spinors
 
 
 def make_slater(system: System):
@@ -43,22 +44,24 @@ def make_slater(system: System):
             so += [sz] * count
             to += [tz] * count
     k = jnp.asarray(np.concatenate(ks))  # (N, 3) momenta
-    s_orb = jnp.asarray(so)  # (N,) spin of each orbital
+    # Spin part of each orbital as a basis spinor: index 0 for up, 1 for down.
+    spin_index = jnp.asarray((1 - np.array(so)) // 2)
     t_orb = jnp.asarray(to)  # (N,) isospin of each orbital
 
     # No variational parameters; kept so all ansatze share one interface.
     params = {}
 
-    def log_psi(params, r, s, t):
-        # Plane-wave part for every (orbital, particle) pair, shape (N, N).
-        plane = jnp.exp(1j * (k @ r.T))
-        # True where particle j carries the labels of orbital a.
-        match = (s_orb[:, None] == s[None, :]) & (t_orb[:, None] == t[None, :])
-        mat = jnp.where(match, plane, 0.0)
-        # ln det without overflow; ln(sign) carries the phase.
-        # At a node (Psi = 0) logabs = -inf: those configurations have zero weight.
-        sign, logabs = jnp.linalg.slogdet(mat)
-        return logabs + jnp.log(sign)
+       def log_psi(params, r, s, t):
+           xi = as_spinors(s)  # (N, 2): labels or spinors
+           plane = jnp.exp(1j * (k @ r.T))
+           # Spin factor of orbital a for particle j: the component of xi_j
+           # along the orbital's spin (1 or 0 for discrete labels).
+           spin = xi[:, spin_index].T  # (orbitals, particles)
+           iso = t_orb[:, None] == t[None, :]
+           mat = jnp.where(iso, plane * spin, 0.0)
+           sign, logabs = jnp.linalg.slogdet(mat)
+           return logabs + jnp.log(sign)
+
 
     return params, log_psi
 

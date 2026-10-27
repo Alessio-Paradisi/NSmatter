@@ -3,8 +3,7 @@
     Psi(R) = exp( J(R) ) * Slater(R),    J(R) = sum_{i<j} u_c(r_ij)
 
 r_ij is the minimum-image distance and c the channel of the pair:
-    0: same spin, same isospin          1: opposite spin, same isospin
-    2: same spin, opposite isospin      3: opposite spin, opposite isospin
+    0: same isospin (nn, pp)            1: opposite isospin (np)
 
 Each channel has its own correlation function
     u_c(r) = (1 - x^2)^3 * sum_m a_{c,m} x^(2m),   x = r / r_c < 1,
@@ -25,7 +24,7 @@ from ..system import System
 from .slater import make_slater
 
 # Number of pair channels (same/opposite spin x same/opposite isospin).
-N_CHANNELS = 4
+N_CHANNELS = 2
 
 
 def jastrow_basis(r2, rc, n_terms):
@@ -42,17 +41,9 @@ def jastrow_basis(r2, rc, n_terms):
     return envelope[..., None] * powers
 
 
-def pair_channel(s, t, i, j):
-    """Channel (0..3) of the pairs (i, j), from the spin and isospin labels.
-
-    s_i s_j = +1 (same) or -1 (opposite), so (1 - s_i s_j) / 2 is 0 or 1.
-    Channel = opposite_spin + 2 * opposite_isospin.
-    Computed from the labels (not from the species order), so it keeps
-    working when spins are sampled.
-    """
-    opposite_spin = (1 - s[i] * s[j]) // 2
-    opposite_isospin = (1 - t[i] * t[j]) // 2
-    return opposite_spin + 2 * opposite_isospin
+def pair_channel(t, i, j):
+    """Channel of the pairs (i, j): 0 same isospin (nn, pp), 1 opposite (np)."""
+    return (1 - t[i] * t[j]) // 2
 
 
 def make_jastrow_slater(system: System, n_terms: int = 4, cutoff: float = None):
@@ -87,7 +78,7 @@ def make_jastrow_slater(system: System, n_terms: int = 4, cutoff: float = None):
         # Basis functions for every pair: shape (n_pairs, n_terms).
         phi = jastrow_basis(r2, rc, n_terms)
         # Coefficients of each pair's channel: shape (n_pairs, n_terms).
-        coeff = a[pair_channel(s, t, i, j)]
+        coeff = a[pair_channel(t, i, j)]
         # Sum over pairs and basis functions.
         return jnp.sum(phi * coeff)
 

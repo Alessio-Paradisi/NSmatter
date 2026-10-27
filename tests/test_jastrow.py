@@ -1,9 +1,10 @@
 """Tests for the Jastrow factor (Jastrow x plane-wave Slater wavefunction).
 
 Interface defined here (module src/nsmatter/wavefunctions/jastrow.py):
-    N_CHANNELS = 4
+    N_CHANNELS = 2   (0: same isospin, 1: opposite isospin; spin dependence
+                      goes into the operator correlations, since spins are spinors)
     jastrow_basis(r2, rc, n_terms) -> basis functions phi_m, shape (..., n_terms)
-    pair_channel(s, t, i, j)       -> channel 0..3 of the pairs (i, j)
+    pair_channel(t, i, j)          -> channel 0..1 of the pairs (i, j)
     make_jastrow_slater(system, n_terms=4, cutoff=None) -> (params, log_psi)
         params = {"jastrow": array of shape (N_CHANNELS, n_terms)}, zeros at start
 Run with:  uv run pytest -q tests/test_jastrow.py
@@ -104,17 +105,13 @@ def test_basis_smooth_at_origin(m):
 # Block 2 - Pair channels
 # =============================================================================
 def test_pair_channels():
-    # Labels of four particles: n_up, n_down, p_up, p_down.
-    s = jnp.array([+1, -1, +1, -1])
+    # Isospin labels of four particles: n, n, p, p.
     t = jnp.array([-1, -1, +1, +1])
     i = jnp.array([0, 0, 0, 2, 1])
     j = jnp.array([0, 1, 2, 3, 2])
-    # (0,0): same spin, same isospin        -> 0
-    # (0,1): opposite spin, same isospin    -> 1
-    # (0,2): same spin, opposite isospin    -> 2
-    # (2,3): opposite spin, same isospin    -> 1 (two protons)
-    # (1,2): opposite spin, opposite isospin -> 3
-    assert pair_channel(s, t, i, j).tolist() == [0, 1, 2, 1, 3]
+    # (0,0) and (0,1): two neutrons -> 0;  (0,2): n-p -> 1;
+    # (2,3): two protons -> 0;  (1,2): n-p -> 1
+    assert pair_channel(t, i, j).tolist() == [0, 0, 1, 0, 1]
 
 
 # =============================================================================
@@ -170,19 +167,19 @@ def test_cutoff_larger_than_half_box_rejected():
 # Block 4 - J against a hand calculation
 # =============================================================================
 def test_two_particle_value_by_hand():
-    # Two neutrons with opposite spins (channel 1), each alone in its species,
+    # Two neutrons (channel 0, same isospin), each alone in its species,
     # so the Slater part is 1 (only k = 0 is occupied). Then
-    #   ln Psi = u_1(r) = (1 - x^2)^3 * sum_m a_{1,m} x^(2m),  x = r / rc,
+    #   ln Psi = u_0(r) = (1 - x^2)^3 * sum_m a_{0,m} x^(2m),  x = r / rc,
     # with r the minimum-image distance and rc = L/2 by default.
     system = System(1, 1, 0, 0, 0.01)
     L = system.box_length
     params, log_psi = make_jastrow_slater(system)
-    a = jnp.zeros((N_CHANNELS, 4)).at[1].set(jnp.array([0.5, -0.2, 0.1, 0.05]))
+    a = jnp.zeros((N_CHANNELS, 4)).at[0].set(jnp.array([0.5, -0.2, 0.1, 0.05]))
     r = jnp.array([[0.3, 0.2, 0.1], [L - 0.9, 1.5, 0.4]])  # close through the boundary
     s, t = jnp.asarray(system.spins), jnp.asarray(system.isospins)
     d = np.asarray(minimum_image(r[0] - r[1], L))
     x2 = (d**2).sum() / (0.5 * L) ** 2
-    expected = (1 - x2) ** 3 * sum(float(a[1, m]) * x2**m for m in range(4))
+    expected = (1 - x2) ** 3 * sum(float(a[0, m]) * x2**m for m in range(4))
     value = log_psi({"jastrow": a}, r, s, t)
     assert np.isclose(value.real, expected, rtol=1e-12)
     assert np.isclose(np.cos(value.imag), 1.0)
@@ -239,6 +236,6 @@ def test_parameter_gradient_is_the_basis_sum():
         for j in range(i + 1, 4):
             d = minimum_image(r[i] - r[j], L)
             phi = jastrow_basis(jnp.sum(d**2), 0.5 * L, 4)
-            c = int(pair_channel(s, t, jnp.array(i), jnp.array(j)))
+            c = int(pair_channel(t, jnp.array(i), jnp.array(j)))
             expected[c] += np.asarray(phi)
     assert np.allclose(grad, expected, atol=1e-12)

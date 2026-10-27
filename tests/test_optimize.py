@@ -59,17 +59,17 @@ def test_log_derivatives_shape_and_values():
 
 def test_unused_channels_have_zero_derivative():
     # Pure neutron matter has no neutron-proton pairs: the parameters of the
-    # opposite-isospin channels (2 and 3) do not affect Psi at all.
+    # opposite-isospin channel (1) do not affect Psi at all.
     # SR must leave them untouched (the diagonal shift keeps S invertible).
     system = pure_neutron_matter(7, 0.16)
     params, log_psi = make_jastrow_slater(system, n_terms=3)
     s, t = jnp.asarray(system.spins), jnp.asarray(system.isospins)
     r = jax.random.uniform(jax.random.PRNGKey(2), (50, 14, 3), maxval=system.box_length)
-    O = log_derivatives(log_psi, params, r, s, t).reshape(50, 4, 3)
-    assert jnp.allclose(O[:, 2:, :], 0.0)
+    O = log_derivatives(log_psi, params, r, s, t).reshape(50, 2, 3)
+    assert jnp.allclose(O[:, 1:, :], 0.0)
     e = jax.random.normal(jax.random.PRNGKey(3), (50,))
-    delta, _, _ = sr_direction(O.reshape(50, 12), e, diag_shift=0.05)
-    assert jnp.allclose(delta.reshape(4, 3)[2:], 0.0)
+    delta, _, _ = sr_direction(O.reshape(50, 6), e, diag_shift=0.05)
+    assert jnp.allclose(delta.reshape(2, 3)[1:], 0.0)
 
 
 # =============================================================================
