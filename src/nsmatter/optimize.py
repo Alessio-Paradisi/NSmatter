@@ -64,3 +64,23 @@ def apply_update(params, delta, lr):
     """params - lr * delta, with delta a flat vector in ravel_pytree order."""
     flat, unravel = ravel_pytree(params)
     return unravel(flat - lr * delta)
+
+
+
+
+def log_derivatives_spin(log_psi, params, r, xi, t):
+    """O for walkers that carry their own spinors: r (W, N, 3), xi (W, N, 2).
+
+    Same as log_derivatives, but maps over the spinors too.
+    """
+    flat, unravel = ravel_pytree(params)
+
+    def re(p, x, s):
+        return jnp.real(log_psi(unravel(p), x, s, t))
+
+    def im(p, x, s):
+        return jnp.imag(log_psi(unravel(p), x, s, t))
+
+    g_re = jax.vmap(jax.grad(re), in_axes=(None, 0, 0))(flat, r, xi)
+    g_im = jax.vmap(jax.grad(im), in_axes=(None, 0, 0))(flat, r, xi)
+    return g_re + 1j * g_im

@@ -34,7 +34,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..geometry import minimum_image
-from ..spin import PAIR_BASIS, as_spinors
+from ..spin import as_spinors
 from ..system import System
 from .central import gaussian_sum, image_shifts
 
@@ -121,15 +121,30 @@ def make_v6_potential(system: System, radial: dict, tol=1e-10):
             + tensor_matrix(dd, r2, "tnt")
         )
 
-        # --- matrix elements <current|v|target> -------------------------------
-        # (v Psi)(X) = sum_X' <X|v|X'> Psi(X'): the CURRENT state is the bra.
-        # The current pair spin state is the product spinor xi_i (x) xi_j; as a
-        # bra its components multiply the rows of A and B directly
-        # (for discrete labels it is a unit vector and picks one row).
+        # --- spin targets in an adapted basis ----------------------------------
+        # The identity (v Psi)(S) = sum_targets <S|v|target> <target|Psi> holds
+        # for ANY orthonormal spin basis of each particle. We use {xi, xi_perp}:
+        # the particle's own spinor and the one orthogonal to it. Then targets
+        # never carry two identical basis spinors, and Phi(target) never vanishes
+        # structurally (with basis spinors it can, e.g. two neutrons both "up" in
+        # the same orbital, which breaks the fast updates of correlated states).
+        # For discrete labels {xi, xi_perp} is {up, down} up to a phase.
+        # Convention: a spin coordinate eta enters Psi as a bra, so the ket of
+        # a target is conj(eta). Spinors must be normalized.
         xi = as_spinors(s)  # (N, 2)
+        perp = jnp.stack([-jnp.conj(xi[:, 1]), jnp.conj(xi[:, 0])], axis=-1)
+        eta = jnp.stack([xi, perp], axis=1)  # (N, 2 basis states, 2 components)
+        # Target index 2*a + b: particle i in eta_i[a], particle j in eta_j[b].
+        eta_i = eta[i][:, jnp.array([0, 0, 1, 1])]  # (n_pairs, 4, 2)
+        eta_j = eta[j][:, jnp.array([0, 1, 0, 1])]
+        kets = jnp.einsum("pta,ptb->ptab", jnp.conj(eta_i), jnp.conj(eta_j)).reshape(n_pairs, 4, 4)
+
+        # --- matrix elements <current|v|target> -------------------------------
+        # (v Psi)(X) = sum_X' <X|v|X'> Psi(X'): the current state is the bra
+        # xi_i (x) xi_j, the target the ket.
         bra = jnp.einsum("pa,pb->pab", xi[i], xi[j]).reshape(n_pairs, 4)
-        A_row = jnp.einsum("pc,pct->pt", bra, A)  # (n_pairs, 4 targets)
-        B_row = jnp.einsum("pc,pct->pt", bra, B)
+        A_row = jnp.einsum("pc,pcd,ptd->pt", bra, A, kets)  # (n_pairs, 4 targets)
+        B_row = jnp.einsum("pc,pcd,ptd->pt", bra, B, kets)
         # Isospin: discrete labels, tau.tau real and symmetric.
         b = pair_index(t[i], t[j])  # current isospin state
         b_sw = pair_index(t[j], t[i])  # isospin state after swapping
@@ -140,13 +155,11 @@ def make_v6_potential(system: System, radial: dict, tol=1e-10):
         amp_swap = B_row * tt_swap[:, None]  # isospins swapped
 
         # --- target configurations --------------------------------------------
-        # Spins: for each pair and each of the 4 targets, replace (xi_i, xi_j)
-        # by the basis spinors of that target state.
-        def spin_targets(p_i, p_j):
-            set_pair = lambda pair: xi.at[p_i].set(pair[0]).at[p_j].set(pair[1])  # noqa: E731
-            return jax.vmap(set_pair)(PAIR_BASIS)
+        def spin_targets(p_i, p_j, e_i, e_j):
+            set_pair = lambda a, b: xi.at[p_i].set(a).at[p_j].set(b)  # noqa: E731
+            return jax.vmap(set_pair)(e_i, e_j)
 
-        s_new = jax.vmap(spin_targets)(i, j)  # (n_pairs, 4, N, 2)
+        s_new = jax.vmap(spin_targets)(i, j, eta_i, eta_j)  # (n_pairs, 4, N, 2)
         t_same = jnp.broadcast_to(t, (n_pairs, t.shape[0]))
         t_swap = jax.vmap(lambda p_i, p_j: t.at[p_i].set(t[p_j]).at[p_j].set(t[p_i]))(i, j)
 

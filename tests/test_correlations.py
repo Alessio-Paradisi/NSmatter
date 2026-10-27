@@ -130,3 +130,20 @@ def test_antisymmetry_with_correlations():
         idx, rev = jnp.array([i, j]), jnp.array([j, i])
         d = log_psi(params, r.at[idx].set(r[rev]), xi.at[idx].set(xi[rev]), t.at[idx].set(t[rev])) - ref
         assert np.isclose(d.real, 0.0, atol=1e-9) and np.isclose(np.cos(d.imag), -1.0, atol=1e-9)
+
+
+# =============================================================================
+# Test 4 - The local energy stays finite where a basis-spinor target would vanish
+# =============================================================================
+def test_local_energy_finite_with_degenerate_orbitals():
+    # One nucleon per species, all in k = 0: setting two neutrons to the same
+    # basis spinor makes Phi exactly zero while Psi is not. The potential must
+    # evaluate its targets in the adapted basis {xi, xi_perp}, so E_L stays finite.
+    from nsmatter.hamiltonian.pair_operators import make_v6_potential
+    from nsmatter.local_energy import make_local_energy
+
+    system = System(1, 1, 1, 1, 0.04)
+    params, log_psi, r, xi, t = random_state(system, 5)
+    radial = {"c": ((200.0, 1.487), (-30.0, 0.465)), "tnt": ((10.0, 0.6),)}
+    e = make_local_energy(log_psi, (make_v6_potential(system, radial),))(params, r, xi, t)
+    assert np.isfinite(e.real) and np.isfinite(e.imag)
