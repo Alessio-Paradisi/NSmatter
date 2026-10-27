@@ -21,12 +21,12 @@ Psi per pair.
 
 Two-body basis index of |a b>: 2 * idx(a) + idx(b), idx(+1) = 0, idx(-1) = 1.
 
-Radial functions, all summed over periodic images:
-- "c", "s", "t", "st": v(r) = sum_k V_k exp(-kappa_k r^2)            (as central.py)
-- "tn", "tnt":         v(r) = sum_k V_k r^2 exp(-kappa_k r^2)
-  The r^2 factor makes v_T vanish at the origin, as physical tensor forces
-  do, and lets the code use v(r) r^_a r^_b = V exp(-kappa r^2) r_a r_b
-  without dividing by r (no singularity when two particles meet).
+Radial functions (radial.py: Gaussian sums or spline tables), summed over
+periodic images:
+- "c", "s", "t", "st": v(r)
+- "tn", "tnt":         w(r) = v_T(r) / r^2, so the code uses v_T r^_a r^_b = w r_a r_b
+  without dividing by r (no singularity when two particles meet). For Gaussian
+  terms this means v_T(r) = sum_k V_k r^2 exp(-kappa_k r^2).
 """
 
 import jax
@@ -36,7 +36,7 @@ import numpy as np
 from ..geometry import minimum_image
 from ..spin import as_spinors
 from ..system import System
-from .central import gaussian_sum, image_shifts
+from .radial import as_radial, image_vectors
 
 # Pauli matrices sigma_x, sigma_y, sigma_z; basis (up, down).
 PAULI = jnp.array(
@@ -71,12 +71,10 @@ def tensor_operator(rvec):
 def make_v6_potential(system: System, radial: dict, tol=1e-10):
     """Potential term for make_local_energy: term(log_psi, params, r, s, t)."""
     L = system.box_length
-
-    # Image vectors. The r^2 factor of the tensor channels lengthens their
-    # tail, so the tolerance is tightened when they are present.
-    all_terms = tuple(term for ch in CHANNELS for term in radial.get(ch, ()))
-    has_tensor = bool(radial.get("tn") or radial.get("tnt"))
-    shifts = jnp.asarray(image_shifts(L, all_terms, tol * (1e-3 if has_tensor else 1.0)))
+    # Radial function objects (tuples of Gaussian terms are converted).
+    radial = {ch: as_radial(radial.get(ch)) for ch in CHANNELS}
+    # Image vectors covering the longest-range channel.
+    shifts = jnp.asarray(image_vectors(L, radial.values()))
 
     i, j = np.triu_indices(system.n_particles, k=1)
     i, j = jnp.asarray(i), jnp.asarray(j)
@@ -84,19 +82,19 @@ def make_v6_potential(system: System, radial: dict, tol=1e-10):
 
     def scalar_sum(r2, ch):
         """Image-summed scalar radial function of a channel, shape (n_pairs,)."""
-        if not radial.get(ch):
+        if radial[ch] is None:
             return jnp.zeros(n_pairs)
-        return jnp.sum(gaussian_sum(r2, radial[ch]), axis=1)
+        return jnp.sum(radial[ch](r2), axis=1)
 
     def tensor_matrix(dd, r2, ch):
         """Image-summed v_T S12 as 4 x 4 spin matrices, shape (n_pairs, 4, 4).
 
         sum_n v(r_n) S12(r^_n) = sum_n w_n [3 r_n r_n^T . (sigma x sigma) - r_n^2 DOT]
-        with v(r) = r^2 w(r), w(r) = sum_k V_k exp(-kappa_k r^2).
+        with w(r) = v_T(r) / r^2 the radial function of the channel.
         """
-        if not radial.get(ch):
+        if radial[ch] is None:
             return jnp.zeros((n_pairs, 4, 4), dtype=jnp.complex128)
-        w = gaussian_sum(r2, radial[ch])  # (n_pairs, n_images)
+        w = radial[ch](r2)  # (n_pairs, n_images)
         rr = 3.0 * jnp.einsum("pn,pna,pnb->pab", w, dd, dd)  # (n_pairs, 3, 3)
         trace_part = jnp.sum(w * r2, axis=1)  # sum_n v(r_n)
         return jnp.einsum("pab,abij->pij", rr, SIGMA_SIGMA) - trace_part[:, None, None] * DOT
