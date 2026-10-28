@@ -139,88 +139,92 @@ def make_static_potential(system: System, radial: dict):
         trace_part = jnp.sum(w * r2, axis=1)  # sum_n v(r_n)
         return jnp.einsum("pab,abij->pij", rr, SIGMA_SIGMA) - trace_part[:, None, None] * DOT
 
-    def term(log_psi, params, r, s, t):
+    def by_channel(log_psi, params, r, s, t):
+        """Potential energy of each active channel (dict channel -> complex); their sum is the term."""
         # --- geometry: all images of all pairs ---------------------------------
         d = minimum_image(r[i] - r[j], L)
         dd = d[:, None, :] + shifts[None]  # (n_pairs, n_images, 3)
         r2 = jnp.sum(dd**2, axis=-1)
 
-        # --- spin operators of each pair, one 4 x 4 matrix per isospin operator ---
+        T = pair_targets(log_psi, params, r, s, t, i, j, needs_swap)
+        iso = isospin_factors(t, i, j)
         eye = jnp.eye(4, dtype=jnp.complex128)
-        spin = {k: jnp.zeros((n_pairs, 4, 4), dtype=jnp.complex128) for k in iso_active}
+        out = {}
         for ch in active:
             spin_op, iso_op = CHANNELS[ch]
             if spin_op == "S12":
-                spin[iso_op] = spin[iso_op] + tensor_matrix(dd, r2, ch)
+                mat = tensor_matrix(dd, r2, ch)
             else:
-                mat = eye if spin_op == "1" else DOT
-                spin[iso_op] = spin[iso_op] + scalar_sum(r2, ch)[:, None, None] * mat
+                mat = scalar_sum(r2, ch)[:, None, None] * (eye if spin_op == "1" else DOT)
+            # <current|v_ch|target> for the 4 spin targets of every pair
+            row = jnp.einsum("pc,pcd,ptd->pt", T["bra"], mat, T["kets"])
+            e = jnp.sum(row * iso[iso_op][0][:, None] * T["rho_same"])  # isospins unchanged
+            if needs_swap:
+                e = e + jnp.sum(row * iso[iso_op][1][:, None] * T["rho_swap"])  # isospins swapped
+            out[ch] = e
+        return out
 
-        # --- spin targets in an adapted basis ----------------------------------
-        # The identity (v Psi)(S) = sum_targets <S|v|target> <target|Psi> holds
-        # for ANY orthonormal spin basis of each particle. We use {xi, xi_perp}:
-        # the particle's own spinor and the one orthogonal to it. Then targets
-        # never carry two identical basis spinors, and Phi(target) never vanishes
-        # structurally (with basis spinors it can, e.g. two neutrons both "up" in
-        # the same orbital, which breaks the fast updates of correlated states).
-        # For discrete labels {xi, xi_perp} is {up, down} up to a phase.
-        # Convention: a spin coordinate eta enters Psi as a bra, so the ket of
-        # a target is conj(eta). Spinors must be normalized.
-        xi = as_spinors(s)  # (N, 2)
-        perp = jnp.stack([-jnp.conj(xi[:, 1]), jnp.conj(xi[:, 0])], axis=-1)
-        eta = jnp.stack([xi, perp], axis=1)  # (N, 2 basis states, 2 components)
-        # Target index 2*a + b: particle i in eta_i[a], particle j in eta_j[b].
-        eta_i = eta[i][:, jnp.array([0, 0, 1, 1])]  # (n_pairs, 4, 2)
-        eta_j = eta[j][:, jnp.array([0, 1, 0, 1])]
-        kets = jnp.einsum("pta,ptb->ptab", jnp.conj(eta_i), jnp.conj(eta_j)).reshape(n_pairs, 4, 4)
+    def term(log_psi, params, r, s, t):
+        return sum(by_channel(log_psi, params, r, s, t).values())
 
-        # --- matrix elements <current|v|target> -------------------------------
-        # (v Psi)(X) = sum_X' <X|v|X'> Psi(X'): the current state is the bra
-        # xi_i (x) xi_j, the target the ket.
-        bra = jnp.einsum("pa,pb->pab", xi[i], xi[j]).reshape(n_pairs, 4)
-        iso = isospin_factors(t, i, j)
-        amp_same = 0.0
-        amp_swap = 0.0
-        for k in iso_active:
-            row = jnp.einsum("pc,pcd,ptd->pt", bra, spin[k], kets)  # (n_pairs, 4 targets)
-            amp_same = amp_same + row * iso[k][0][:, None]  # isospins unchanged
-            amp_swap = amp_swap + row * iso[k][1][:, None]  # isospins swapped
+    term.by_channel = by_channel
+    return term
 
-        # --- target configurations --------------------------------------------
+
+def pair_targets(log_psi, params, r, s, t, i, j, needs_swap=True):
+    """Spin targets of every pair (i, j) and the wavefunction ratios Psi(target) / Psi.
+
+    The identity (v Psi)(S) = sum_targets <S|v|target> <target|Psi> holds for ANY
+    orthonormal spin basis of each particle. We use {xi, xi_perp}: the particle's
+    own spinor and the one orthogonal to it. Then targets never carry two
+    identical basis spinors, and Phi(target) never vanishes structurally (with
+    basis spinors it can, e.g. two neutrons both "up" in the same orbital, which
+    breaks the fast updates of correlated states). For discrete labels
+    {xi, xi_perp} is {up, down} up to a phase.
+    Convention: a spin coordinate eta enters Psi as a bra, so the ket of a target
+    is conj(eta). Spinors must be normalized.
+
+    Returns dict with
+        bra (n_pairs, 4):      current pair spin state xi_i (x) xi_j
+        kets (n_pairs, 4, 4):  the 4 target spin states (target index 2a + b)
+        rho_same, rho_swap (n_pairs, 4): Psi(target) / Psi with isospins unchanged / swapped
+                               (rho_swap is zero if needs_swap is False)
+    """
+    n_pairs = i.shape[0]
+    xi = as_spinors(s)  # (N, 2)
+    perp = jnp.stack([-jnp.conj(xi[:, 1]), jnp.conj(xi[:, 0])], axis=-1)
+    eta = jnp.stack([xi, perp], axis=1)  # (N, 2 basis states, 2 components)
+    eta_i = eta[i][:, jnp.array([0, 0, 1, 1])]  # (n_pairs, 4, 2)
+    eta_j = eta[j][:, jnp.array([0, 1, 0, 1])]
+    kets = jnp.einsum("pta,ptb->ptab", jnp.conj(eta_i), jnp.conj(eta_j)).reshape(n_pairs, 4, 4)
+    # (v Psi)(X) = sum_X' <X|v|X'> Psi(X'): the current state is the bra.
+    bra = jnp.einsum("pa,pb->pab", xi[i], xi[j]).reshape(n_pairs, 4)
+
+    fast = getattr(log_psi, "pair_move", None)  # rank-2 updates (correlations.py)
+    if fast is not None:
+        prepare, move = fast
+        cache = prepare(params, r, xi, t)
+        u0 = jnp.zeros(3)
+
+        def ratio(p_i, p_j, e_i, e_j, t_i, t_j):
+            return move(params, cache, p_i, p_j, u0, e_i, e_j, t_i, t_j)
+
+        over_pairs = jax.vmap(jax.vmap(ratio, in_axes=(None, None, 0, 0, None, None)))
+        rho_same = jnp.exp(over_pairs(i, j, eta_i, eta_j, t[i], t[j]))
+        rho_swap = jnp.exp(over_pairs(i, j, eta_i, eta_j, t[j], t[i])) if needs_swap else jnp.zeros_like(rho_same)
+    else:
         def spin_targets(p_i, p_j, e_i, e_j):
-            set_pair = lambda a, b: xi.at[p_i].set(a).at[p_j].set(b)  # noqa: E731
-            return jax.vmap(set_pair)(e_i, e_j)
+            return jax.vmap(lambda a, b: xi.at[p_i].set(a).at[p_j].set(b))(e_i, e_j)
 
         s_new = jax.vmap(spin_targets)(i, j, eta_i, eta_j)  # (n_pairs, 4, N, 2)
         t_same = jnp.broadcast_to(t, (n_pairs, t.shape[0]))
         t_swap = jax.vmap(lambda p_i, p_j: t.at[p_i].set(t[p_j]).at[p_j].set(t[p_i]))(i, j)
-
-        # --- wavefunction ratios at all targets --------------------------------
-        fast = getattr(log_psi, "pair_move", None)  # rank-2 updates (correlations.py)
-        if fast is not None:
-            prepare, move = fast
-            cache = prepare(params, r, xi, t)
-            u0 = jnp.zeros(3)
-            ratio = lambda p_i, p_j, e_i, e_j, t_i, t_j: move(params, cache, p_i, p_j, u0, e_i, e_j, t_i, t_j)  # noqa: E731
-            over_pairs = jax.vmap(jax.vmap(ratio, in_axes=(None, None, 0, 0, None, None)))
-            rho_same = jnp.exp(over_pairs(i, j, eta_i, eta_j, t[i], t[j]))
-            energy = jnp.sum(amp_same * rho_same)
-            if needs_swap:
-                rho_swap = jnp.exp(over_pairs(i, j, eta_i, eta_j, t[j], t[i]))
-                energy = energy + jnp.sum(amp_swap * rho_swap)
-            return energy
-
         lp0 = log_psi(params, r, xi, t)
         over_targets = jax.vmap(log_psi, in_axes=(None, None, 0, None))  # 4 spin targets
         over_pairs = jax.vmap(over_targets, in_axes=(None, None, 0, 0))  # all pairs
-        rho_same = jnp.exp(over_pairs(params, r, s_new, t_same) - lp0)  # (n_pairs, 4)
-        energy = jnp.sum(amp_same * rho_same)
-        if needs_swap:
-            rho_swap = jnp.exp(over_pairs(params, r, s_new, t_swap) - lp0)
-            energy = energy + jnp.sum(amp_swap * rho_swap)
-        return energy
-
-    return term
+        rho_same = jnp.exp(over_pairs(params, r, s_new, t_same) - lp0)
+        rho_swap = jnp.exp(over_pairs(params, r, s_new, t_swap) - lp0) if needs_swap else jnp.zeros_like(rho_same)
+    return {"bra": bra, "kets": kets, "rho_same": rho_same, "rho_swap": rho_swap}
 
 
 def make_v6_potential(system: System, radial: dict, tol=None):

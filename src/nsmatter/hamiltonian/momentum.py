@@ -75,7 +75,8 @@ def make_momentum_potential(system: System, radial: dict):
     i, j = jnp.asarray(i), jnp.asarray(j)
     n_pairs = i.shape[0]
 
-    def term(log_psi, params, r, s, t):
+    def by_channel(log_psi, params, r, s, t):
+        """Energy of each active channel (dict channel -> complex); their sum is the term."""
         # --- image moments of every active channel -------------------------------
         d = minimum_image(r[i] - r[j], L)
         dd = d[:, None, :] + shifts[None]  # (n_pairs, n_images, 3)
@@ -165,7 +166,7 @@ def make_momentum_potential(system: System, radial: dict):
             return rho, out
 
         def channel_sum(rho, lval, which):
-            total = 0.0
+            total = {}
             for ch in active:
                 kind, spin_op, iso_op = CHANNELS[ch]
                 factor = iso[iso_op][which]  # (n_pairs,)
@@ -175,16 +176,21 @@ def make_momentum_potential(system: System, radial: dict):
                     val = spin_amp[spin_op] * lval[ch]
                 else:
                     val = jnp.einsum("pabt,ptab->pt", spin_amp["SS"], lval[ch])
-                total = total + jnp.sum(factor[:, None] * rho * val)
+                total[ch] = jnp.sum(factor[:, None] * rho * val)
             return total
 
         rho, lval = l_parts(*over_pairs(i, j, eta_i, eta_j, t[i], t[j]))
         energy = channel_sum(rho, lval, 0)
         if needs_swap:  # isospins of i and j exchanged
             rho, lval = l_parts(*over_pairs(i, j, eta_i, eta_j, t[j], t[i]))
-            energy = energy + channel_sum(rho, lval, 1)
+            swapped = channel_sum(rho, lval, 1)
+            energy = {ch: energy[ch] + swapped[ch] for ch in energy}
         return energy
 
+    def term(log_psi, params, r, s, t):
+        return sum(by_channel(log_psi, params, r, s, t).values())
+
+    term.by_channel = by_channel
     return term
 
 

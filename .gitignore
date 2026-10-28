@@ -28,3 +28,8 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.npz
+results/configs/
+results/logs/
+results/figures/
+scan_*.log
+__pycache__/

@@ -7,7 +7,7 @@ Reads results/nv2_vmc.jsonl (written by run_nv2.py / eos_scan.py), and for each 
   4. propagates the VMC error bars by a parametric bootstrap (refit on
      E_i + err_i * gaussian noise, --bootstrap samples).
 Outputs: a summary table on screen, results/neutron_star.json, and the figure
-results/neutron_star.png (E/N, P(eps), M(R)).
+results/neutron_star.pdf (E/N, P(eps), M(R); --format png for a bitmap).
 
 Comparison data (e.g. your BHF results) as text files with columns rho E/N [err]:
     --compare "BHF Ib:bhf/pnm_Ib.dat" "BHF IIb:bhf/pnm_IIb.dat"
@@ -90,6 +90,7 @@ def main():
     p.add_argument("--no-causal-cap", action="store_true", help="keep the fit even where c_s^2 > 1")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="results/neutron_star")
+    p.add_argument("--format", default="pdf", choices=("pdf", "png", "svg"))
     a = p.parse_args()
     rng = np.random.default_rng(a.seed)
 
@@ -163,7 +164,7 @@ def main():
     fig.tight_layout()
     out = pathlib.Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out.with_suffix(".png"), dpi=150)
+    fig.savefig(out.with_suffix("." + a.format), dpi=200, bbox_inches="tight")
     out.with_suffix(".json").write_text(json.dumps(summary, indent=2))
 
     print(f"\n{'model':6s} {'M_max':>12s} {'R(M_max)':>12s} {'R_1.4':>12s} {'Lambda_1.4':>14s}  E(rho0)  rho_c(Mmax)  cs2>1 at")
@@ -174,7 +175,7 @@ def main():
               f"  {s['E_pnm_rho0']:6.2f}  {s['rho_c_max']:6.2f}       {acs}")
     print("(densities in fm^-3; beyond the largest computed density the EOS is the fit's extrapolation;")
     print(" where c_s^2 would exceed 1 the EOS is continued with c_s^2 = 1 unless --no-causal-cap)")
-    print(f"\nsaved {out.with_suffix('.png')} and {out.with_suffix('.json')}")
+    print(f"\nsaved {out.with_suffix('.' + a.format)} and {out.with_suffix('.json')}")
 
 
 if __name__ == "__main__":

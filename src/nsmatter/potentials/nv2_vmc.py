@@ -18,6 +18,14 @@ from ..system import System
 from .nv2 import MODELS, nv2_radial
 
 THESIS_NAMES = {"Ia": "a", "Ib": "b", "IIa": "at", "IIb": "bt"}
+# Channels grouped by operator type, in display order (energy decomposition).
+GROUPS = {
+    "central": ("c", "t", "s", "st"),  # 1, tau.tau, sigma.sigma, (sigma.sigma)(tau.tau)
+    "tensor": ("tn", "tnt"),  # S12, S12 tau.tau
+    "spin-orbit": ("ls", "lst"),  # L.S, L.S tau.tau
+    "quadratic": ("l2", "l2s", "ls2"),  # L^2, L^2 sigma.sigma, (L.S)^2
+    "charge-dependent": ("T", "sT", "tnT", "lsT", "tz"),  # T12, sigma.sigma T12, S12 T12, L.S T12, tau_z + tau_z
+}
 STATIC = tuple(pair_operators.CHANNELS)  # c s tn t st tnt T sT tnT tz
 MOMENTUM = tuple(ch for ch in momentum.CHANNELS if ch in ("ls", "lst", "lsT", "l2", "l2s", "ls2"))
 
@@ -60,7 +68,11 @@ def make_nv2_potential(system: System, model, tables=None, momentum_terms=True):
         return static
     mom = momentum.make_momentum_potential(system, {ch: tables[ch] for ch in MOMENTUM})
 
-    def term(log_psi, params, r, s, t):
-        return static(log_psi, params, r, s, t) + mom(log_psi, params, r, s, t)
+    def by_channel(log_psi, params, r, s, t):
+        return {**static.by_channel(log_psi, params, r, s, t), **mom.by_channel(log_psi, params, r, s, t)}
 
+    def term(log_psi, params, r, s, t):
+        return sum(by_channel(log_psi, params, r, s, t).values())
+
+    term.by_channel = by_channel
     return term

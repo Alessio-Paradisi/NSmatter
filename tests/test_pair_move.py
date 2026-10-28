@@ -56,3 +56,17 @@ def test_fast_and_full_potential_terms_agree(system):
         fast = complex(term(log_psi, params, r, xi, t))
         full = complex(term(full_psi, params, r, xi, t))
         assert np.isclose(fast, full, rtol=1e-11)
+
+
+def test_energy_components_add_up():
+    """make_local_energy_components: kinetic + every channel = make_local_energy."""
+    from nsmatter.local_energy import make_local_energy, make_local_energy_components
+
+    system = SYSTEMS[0]
+    params, log_psi, r, xi, t = setup(system)
+    static = make_static_potential(system, {ch: ((10.0 + k, 0.8 + 0.1 * k),) for k, ch in enumerate(STATIC_CHANNELS)})
+    mom = make_momentum_potential(system, {ch: ((5.0 + k, 0.9),) for k, ch in enumerate(MOMENTUM_CHANNELS)})
+    comps = make_local_energy_components(log_psi, (static, mom))(params, r, xi, t)
+    total = make_local_energy(log_psi, (static, mom))(params, r, xi, t)
+    assert set(comps) == {"kinetic"} | {f"v_{c}" for c in (*STATIC_CHANNELS, *MOMENTUM_CHANNELS)}
+    assert np.isclose(sum(comps.values()), total, rtol=1e-12)
