@@ -103,31 +103,47 @@ def make_momentum_potential(system: System, radial: dict):
         # --- isospin factors: operator -> (unchanged, swapped) ---------------------
         iso = isospin_factors(t, i, j)
 
-        # --- ln Psi, g and K at every target --------------------------------------
-        def spin_targets(p_i, p_j, e_i, e_j):
-            return jax.vmap(lambda a, c: xi.at[p_i].set(a).at[p_j].set(c))(e_i, e_j)
+        # --- ln Psi(target) - ln Psi, g and K at every target ------------------------
+        # With log_psi.pair_move (correlations.py) each target is a rank-2 update of
+        # the current configuration, O(N^2); otherwise Psi is evaluated in full.
+        fast = getattr(log_psi, "pair_move", None)
+        u0 = jnp.zeros(3)
 
-        s_new = jax.vmap(spin_targets)(i, j, eta_i, eta_j)  # (n_pairs, 4, N, 2)
-        t_same = jnp.broadcast_to(t, (n_pairs, t.shape[0]))
-        t_swap = jax.vmap(lambda p_i, p_j: t.at[p_i].set(t[p_j]).at[p_j].set(t[p_i]))(i, j)
-        lp0 = log_psi(params, r, xi, t)
+        def jet(f):
+            """f(0), g = f'/2 and K = f''/4 + g g^T in one nested forward pass."""
 
-        def derivatives(p_i, p_j, s_x, t_x):
-            def f(u):
-                x = r.at[p_i].add(u).at[p_j].add(-u)
-                return log_psi(params, x, s_x, t_x)
+            def first(u):
+                df, val = jax.jacfwd(lambda v: (f(v), f(v)), has_aux=True)(u)
+                return df, (df, val)
 
-            u0 = jnp.zeros(3)
-            g = jax.jacfwd(f)(u0) / 2.0
-            H = jax.jacfwd(jax.jacfwd(f))(u0) / 4.0
-            return f(u0), g, H + jnp.outer(g, g)
+            d2f, (df, val) = jax.jacfwd(first, has_aux=True)(u0)
+            g = df / 2.0
+            return val, g, d2f / 4.0 + jnp.outer(g, g)
 
-        over_targets = jax.vmap(derivatives, in_axes=(None, None, 0, None))
-        over_pairs = jax.vmap(over_targets, in_axes=(0, 0, 0, 0))
+        if fast is not None:
+            prepare, move = fast
+            cache = prepare(params, r, xi, t)
+
+            def derivatives(p_i, p_j, e_i, e_j, t_i, t_j):
+                return jet(lambda u: move(params, cache, p_i, p_j, u, e_i, e_j, t_i, t_j))
+        else:
+            lp0 = log_psi(params, r, xi, t)
+
+            def derivatives(p_i, p_j, e_i, e_j, t_i, t_j):
+                s_x = xi.at[p_i].set(e_i).at[p_j].set(e_j)
+                t_x = t.at[p_i].set(t_i).at[p_j].set(t_j)
+
+                def f(u):
+                    return log_psi(params, r.at[p_i].add(u).at[p_j].add(-u), s_x, t_x) - lp0
+
+                return jet(f)
+
+        over_targets = jax.vmap(derivatives, in_axes=(None, None, 0, 0, None, None))  # 4 spin targets
+        over_pairs = jax.vmap(over_targets, in_axes=(0, 0, 0, 0, 0, 0))
 
         def l_parts(lp, g, K):
             """Ratio and L-operator values at the targets, per active channel."""
-            rho = jnp.exp(lp - lp0)  # (n_pairs, 4)
+            rho = jnp.exp(lp)  # Psi(target) / Psi, (n_pairs, 4)
             out = {}
             trK = jnp.trace(K, axis1=-2, axis2=-1)
             for ch in active:
@@ -162,10 +178,10 @@ def make_momentum_potential(system: System, radial: dict):
                 total = total + jnp.sum(factor[:, None] * rho * val)
             return total
 
-        rho, lval = l_parts(*over_pairs(i, j, s_new, t_same))
+        rho, lval = l_parts(*over_pairs(i, j, eta_i, eta_j, t[i], t[j]))
         energy = channel_sum(rho, lval, 0)
-        if needs_swap:
-            rho, lval = l_parts(*over_pairs(i, j, s_new, t_swap))
+        if needs_swap:  # isospins of i and j exchanged
+            rho, lval = l_parts(*over_pairs(i, j, eta_i, eta_j, t[j], t[i]))
             energy = energy + channel_sum(rho, lval, 1)
         return energy
 

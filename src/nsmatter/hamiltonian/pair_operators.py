@@ -196,6 +196,20 @@ def make_static_potential(system: System, radial: dict):
         t_swap = jax.vmap(lambda p_i, p_j: t.at[p_i].set(t[p_j]).at[p_j].set(t[p_i]))(i, j)
 
         # --- wavefunction ratios at all targets --------------------------------
+        fast = getattr(log_psi, "pair_move", None)  # rank-2 updates (correlations.py)
+        if fast is not None:
+            prepare, move = fast
+            cache = prepare(params, r, xi, t)
+            u0 = jnp.zeros(3)
+            ratio = lambda p_i, p_j, e_i, e_j, t_i, t_j: move(params, cache, p_i, p_j, u0, e_i, e_j, t_i, t_j)  # noqa: E731
+            over_pairs = jax.vmap(jax.vmap(ratio, in_axes=(None, None, 0, 0, None, None)))
+            rho_same = jnp.exp(over_pairs(i, j, eta_i, eta_j, t[i], t[j]))
+            energy = jnp.sum(amp_same * rho_same)
+            if needs_swap:
+                rho_swap = jnp.exp(over_pairs(i, j, eta_i, eta_j, t[j], t[i]))
+                energy = energy + jnp.sum(amp_swap * rho_swap)
+            return energy
+
         lp0 = log_psi(params, r, xi, t)
         over_targets = jax.vmap(log_psi, in_axes=(None, None, 0, None))  # 4 spin targets
         over_pairs = jax.vmap(over_targets, in_axes=(None, None, 0, 0))  # all pairs
