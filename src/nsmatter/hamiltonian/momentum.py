@@ -1,10 +1,11 @@
 """Momentum-dependent two-body operators: L.S, L^2, (L.S)^2 and their spin-isospin forms.
 
 Channels (each with a radial function, see radial.py):
-    "ls"  : v L.S              "lst" : v L.S tau.tau
+    "ls"  : v L.S              "lst" : v L.S tau.tau      "lsT": v L.S T12
     "l2"  : v L^2              "l2t" : v L^2 tau.tau
     "l2s" : v L^2 sigma.sigma  "l2st": v L^2 (sigma.sigma)(tau.tau)
     "ls2" : v (L.S)^2          "ls2t": v (L.S)^2 tau.tau
+(T12 = 3 tau_iz tau_jz - tau.tau, see pair_operators.isospin_factors.)
 
 L = r x p for the pair, r = r_i - r_j, p = -i d, d = (grad_i - grad_j) / 2 (the
 derivative with respect to r), and S = (sigma_i + sigma_j) / 2. L acts on
@@ -32,7 +33,7 @@ import numpy as np
 from ..geometry import minimum_image
 from ..spin import as_spinors
 from ..system import System
-from .pair_operators import DOT, PAULI, pair_index
+from .pair_operators import DOT, PAULI, SWAPPING, has_both_species, isospin_factors
 from .radial import as_radial, image_vectors
 
 EYE2 = jnp.eye(2, dtype=jnp.complex128)
@@ -47,16 +48,17 @@ for a, b, c in [(0, 1, 2), (1, 2, 0), (2, 0, 1)]:
     EPS[a, b, c], EPS[a, c, b] = 1.0, -1.0
 EPS = jnp.asarray(EPS)
 
-# channel -> (kind of L operator, spin operator, multiplies tau.tau?)
+# channel -> (kind of L operator, spin operator, isospin operator)
 CHANNELS = {
-    "ls": ("ls", "S", False),
-    "lst": ("ls", "S", True),
-    "l2": ("l2", "1", False),
-    "l2t": ("l2", "1", True),
-    "l2s": ("l2", "ss", False),
-    "l2st": ("l2", "ss", True),
-    "ls2": ("ls2", "SS", False),
-    "ls2t": ("ls2", "SS", True),
+    "ls": ("ls", "S", "1"),
+    "lst": ("ls", "S", "tt"),
+    "lsT": ("ls", "S", "T"),
+    "l2": ("l2", "1", "1"),
+    "l2t": ("l2", "1", "tt"),
+    "l2s": ("l2", "ss", "1"),
+    "l2st": ("l2", "ss", "tt"),
+    "ls2": ("ls2", "SS", "1"),
+    "ls2t": ("ls2", "SS", "tt"),
 }
 
 
@@ -66,7 +68,8 @@ def make_momentum_potential(system: System, radial: dict):
     radial = {ch: as_radial(radial.get(ch)) for ch in CHANNELS}
     active = [ch for ch in CHANNELS if radial[ch] is not None]
     shifts = jnp.asarray(image_vectors(L, radial.values()))
-    needs_swap = any(CHANNELS[ch][2] for ch in active)  # isospin-swapped targets only for tau.tau
+    # Isospin-swapped targets only for tau.tau / T12 and only with both species present.
+    needs_swap = has_both_species(system) and any(CHANNELS[ch][2] in SWAPPING for ch in active)
 
     i, j = np.triu_indices(system.n_particles, k=1)
     i, j = jnp.asarray(i), jnp.asarray(j)
@@ -97,14 +100,8 @@ def make_momentum_potential(system: System, radial: dict):
             "SS": jnp.einsum("pc,abcd,ptd->pabt", bra, SS_PAIR, kets),
         }
 
-        # --- isospin factors ----------------------------------------------------
-        b = pair_index(t[i], t[j])
-        b_sw = pair_index(t[j], t[i])
-        differ = (t[i] != t[j]).astype(jnp.float64)
-        iso = {  # (target isospins unchanged, swapped) for (identity, tau.tau)
-            False: (jnp.ones(n_pairs), jnp.zeros(n_pairs)),
-            True: (DOT[b, b], DOT[b, b_sw] * differ),
-        }
+        # --- isospin factors: operator -> (unchanged, swapped) ---------------------
+        iso = isospin_factors(t, i, j)
 
         # --- ln Psi, g and K at every target --------------------------------------
         def spin_targets(p_i, p_j, e_i, e_j):
@@ -154,8 +151,8 @@ def make_momentum_potential(system: System, radial: dict):
         def channel_sum(rho, lval, which):
             total = 0.0
             for ch in active:
-                kind, spin_op, with_tt = CHANNELS[ch]
-                factor = iso[with_tt][which]  # (n_pairs,)
+                kind, spin_op, iso_op = CHANNELS[ch]
+                factor = iso[iso_op][which]  # (n_pairs,)
                 if kind == "ls":
                     val = jnp.einsum("pat,pta->pt", spin_amp["S"], lval[ch])
                 elif kind == "l2":

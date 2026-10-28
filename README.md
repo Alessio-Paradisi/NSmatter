@@ -97,8 +97,8 @@ with the operators
 | central and spin-isospin | 1, σ_i·σ_j, τ_i·τ_j, (σ_i·σ_j)(τ_i·τ_j) |
 | tensor | S_ij, S_ij τ_i·τ_j, with S_ij = 3(σ_i·r̂)(σ_j·r̂) − σ_i·σ_j |
 | spin-orbit | L·S, L·S τ_i·τ_j |
-| quadratic in momentum | L², L² τ_i·τ_j, L² σ_i·σ_j, L² (σ_i·σ_j)(τ_i·τ_j), (L·S)², (L·S)² τ_i·τ_j |
-| charge dependent | T_ij, σ_i·σ_j T_ij, S_ij T_ij, τ_i^z + τ_j^z, plus electromagnetic terms |
+| quadratic in momentum | L², L² σ_i·σ_j, (L·S)² |
+| charge dependent | T_ij, σ_i·σ_j T_ij, S_ij T_ij, L·S T_ij, τ_i^z + τ_j^z, with T_ij = 3τ_i^z τ_j^z − τ_i·τ_j (electromagnetic terms are left out: negligible in neutron matter) |
 
 The long-range one-pion-exchange part is regularized with a cutoff R_L and the
 short-range contact part with a Gaussian of range R_S:
@@ -497,7 +497,7 @@ NSmatter/
 │   │   ├── central.py          central test potentials, periodic images
 │   │   ├── exchange.py         σ·σ, τ·τ by exchange of coordinates
 │   │   ├── pair_operators.py   general pair operators, tensor force
-│   │   ├── momentum.py         L·S, L², (L·S)²
+│   │   ├── momentum.py         L·S, L², (L·S)² (with τ·τ and T_ij forms)
 │   │   ├── nv2.py              NV2 radial functions from tables
 │   │   └── three_body.py       NV3 three-nucleon force
 │   ├── local_energy.py         assembles E_L from kinetic and potential terms

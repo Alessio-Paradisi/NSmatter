@@ -14,7 +14,7 @@ and converted with as_radial.
 Tensor channels take w(r) = v_T(r) / r^2 (finite at r = 0 for physical tensor
 forces), so that the code can use v_T r^_a r^_b = w r_a r_b without dividing
 by r. For Gaussians this is the convention v_T(r) = sum_k V_k r^2 exp(-kappa_k r^2);
-for tables use tensor_table(r_grid, v_T).
+for tables use tensor_table(r_grid, v_T) (spline through v_T, divided by r^2 on evaluation).
 """
 
 import jax.numpy as jnp
@@ -63,17 +63,22 @@ class Table:
         return jnp.where(r < self.r_max, value, 0.0)
 
 
-def tensor_table(r_grid, v_tensor):
-    """Table of w(r) = v_T(r) / r^2 for a tensor channel.
+class TensorTable(Table):
+    """w(r) = v_T(r) / r^2 for a tensor channel, with the spline through v_T itself.
 
-    At r = 0 (where both vanish) the value is extrapolated quadratically from
-    the next three grid points.
+    v_T is smooth and may be finite at r = 0 (e.g. regularized two-pion exchange),
+    where w diverges like 1/r^2; only w r_a r_b = v_T r^_a r^_b enters, which stays
+    bounded. At r = 0 exactly (S12 undefined, measure zero) the value is 0.
     """
-    r = np.asarray(r_grid, dtype=float)
-    w = np.zeros_like(r)
-    w[1:] = np.asarray(v_tensor, dtype=float)[1:] / r[1:] ** 2
-    w[0] = 3 * w[1] - 3 * w[2] + w[3]
-    return Table(r, w)
+
+    def __call__(self, r2):
+        safe = jnp.where(r2 > 0, r2, 1.0)
+        return jnp.where(r2 > 0, super().__call__(safe) / safe, 0.0)
+
+
+def tensor_table(r_grid, v_tensor):
+    """Radial object for a tensor channel from v_T(r) on a uniform grid (see TensorTable)."""
+    return TensorTable(r_grid, v_tensor)
 
 
 def as_radial(f):

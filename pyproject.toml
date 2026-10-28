@@ -1,7 +1,7 @@
 [project]
 name = "nsmatter"
 version = "0.1.0"
-description = "Add your description here"
+description = "Variational Monte Carlo for nuclear and neutron-star matter with NV2 chiral potentials"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=2.5.4",
     "pyyaml>=6.0.3",
     "scipy>=1.18.1",
+    "sympy>=1.14.0",
 ]
 
 [build-system]
