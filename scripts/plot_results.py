@@ -28,10 +28,10 @@ import numpy as np  # noqa: E402
 from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
 from scipy.special import spherical_jn  # noqa: E402
 
+from nsmatter.plotting import NEUTRON, PROTON, draw_walker  # noqa: E402
 from nsmatter.potentials.nv2_vmc import GROUPS  # noqa: E402
 from nsmatter.results import component, configs, load, select, structure  # noqa: E402
 
-NEUTRON, PROTON = "#1f77b4", "#ff7f0e"
 CLASS_STYLE = {"nn": ("nn", NEUTRON), "np": ("np", "#2ca02c"), "pp": ("pp", PROTON)}
 FIG = pathlib.Path("results/figures")
 FORMAT = ["pdf"]  # set from --format
@@ -148,47 +148,6 @@ def plot_pairs(a):
 # =============================================================================
 # config
 # =============================================================================
-def draw_box(ax, L, offset=(0, 0, 0), **kw):
-    o = np.asarray(offset) - L / 2
-    for s in range(3):
-        for a_ in (0, L):
-            for b_ in (0, L):
-                p0, p1 = np.zeros(3), np.zeros(3)
-                u, v = [k for k in range(3) if k != s]
-                p0[u] = p1[u] = a_
-                p0[v] = p1[v] = b_
-                p1[s] = L
-                ax.plot(*zip(o + p0, o + p1), **kw)
-
-
-def draw_walker(ax, r, spin, t, L, images=False, spins=True, arrow=None):
-    """Particles wrapped into [-L/2, L/2); neighbouring copies faded with --images."""
-    arrow = 0.12 * L if arrow is None else arrow
-    r = (r + L / 2) % L - L / 2
-    shifts = [np.zeros(3)]
-    if images:
-        g = (-1, 0, 1)
-        shifts = [L * np.array([x, y, z]) for x in g for y in g for z in g]
-    for sh in shifts:
-        central = not np.any(sh)
-        alpha = 1.0 if central else 0.35
-        for tz, col, lab in ((-1, NEUTRON, "neutron"), (1, PROTON, "proton")):
-            m = t == tz
-            if not m.any():
-                continue
-            p = r[m] + sh
-            ax.scatter(*p.T, s=60 if central else 30, color=col, alpha=alpha, edgecolors="k" if central else "none",
-                       linewidths=0.4, depthshade=central, label=lab if central else None)
-            if spins and central:
-                ax.quiver(*p.T, *(arrow * spin[m]).T, color="k", lw=1.0, arrow_length_ratio=0.3, alpha=0.8)
-        if not central:
-            draw_box(ax, L, offset=sh, color="gray", lw=0.4, alpha=0.25)
-    draw_box(ax, L, color="k", lw=0.9, alpha=0.8)
-    lim = 1.5 * L if images else 0.6 * L
-    ax.set(xlim=(-lim, lim), ylim=(-lim, lim), zlim=(-lim, lim), xlabel="x (fm)", ylabel="y (fm)", zlabel="z (fm)")
-    ax.set_box_aspect((1, 1, 1))
-
-
 def plot_config(a):
     if a.npz:
         data = np.load(a.npz)
