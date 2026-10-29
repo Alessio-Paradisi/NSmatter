@@ -36,14 +36,18 @@ from nsmatter.eos import RHO0, beta_equilibrium, causal_cap, eos_table, fit_pnm,
 from nsmatter.tov import TabulatedEOS, mass_radius  # noqa: E402
 
 
-def load_points(path, model, populations):
-    """{density: (E/N, error)} for one model and population set (last run wins)."""
+def load_points(path, model, populations, three_body=None):
+    """{density: (E/N, error)} for one model and population set (last run wins).
+
+    three_body: None for NV2-only runs, or the NV3 model (e.g. "Ib*") for NV2+3 runs.
+    """
     pts = {}
     for line in pathlib.Path(path).read_text().splitlines():
         if not line.strip():
             continue
         rec = json.loads(line)
-        if rec["model"] == model and tuple(rec["populations"]) == populations and not rec.get("static_only"):
+        if (rec["model"] == model and tuple(rec["populations"]) == populations and not rec.get("static_only")
+                and rec.get("three_body") == three_body):
             pts[round(rec["density"], 6)] = (rec["E_per_N"], rec["error"])
     rho = np.array(sorted(pts))
     E = np.array([pts[r][0] for r in rho])
@@ -84,6 +88,8 @@ def main():
     p.add_argument("--results", default="results/nv2_vmc.jsonl")
     p.add_argument("--models", nargs="+", default=["Ia", "Ib", "IIa", "IIb"])
     p.add_argument("--beta", action="store_true", help="n p e mu in beta equilibrium (needs SNM)")
+    p.add_argument("--three-body", nargs="*", default=None,
+                   help="NV3 model per --models entry (e.g. Ia* Ib*) to use NV2+3 runs; default NV2 only")
     p.add_argument("--snm-file", default=None, help="SNM E/N table if not from VMC")
     p.add_argument("--compare", nargs="*", default=[], help='"label:file" with columns rho E/N [err]')
     p.add_argument("--bootstrap", type=int, default=50)
@@ -97,10 +103,14 @@ def main():
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.6))
     summary = {}
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    for c, model in zip(colors, a.models):
-        rho, E, err = load_points(a.results, model, (7, 7, 0, 0))
+    tb_models = a.three_body if a.three_body else [None] * len(a.models)
+    if len(tb_models) != len(a.models):
+        raise SystemExit("--three-body needs one NV3 model per --models entry")
+    for c, model, tb in zip(colors, a.models, tb_models):
+        rho, E, err = load_points(a.results, model, (7, 7, 0, 0), tb)
+        label = f"NV2-{model}" + (f"+3-{tb}" if tb else "")
         if len(rho) < 5:
-            print(f"NV2-{model}: only {len(rho)} PNM points (need >= 5 for the 4-parameter fit), skipped")
+            print(f"{label}: only {len(rho)} PNM points (need >= 5 for the 4-parameter fit), skipped")
             continue
         pnm, _ = fit_pnm(rho, E, err)
         snm = None
@@ -110,7 +120,7 @@ def main():
             else:
                 rs, Es, es = load_points(a.results, model, (7, 7, 7, 7))
             if len(rs) < 3:
-                print(f"NV2-{model}: --beta needs >= 3 SNM points, skipped")
+                print(f"{label}: --beta needs >= 3 SNM points, skipped")
                 continue
             snm, _ = fit_snm(rs, Es, es)
 
@@ -130,7 +140,7 @@ def main():
         th0 = thermodynamics(pnm, np.array([RHO0]))
         acausal = thermodynamics(pnm, np.linspace(0.05, 1.2, 500))
         rho_acausal = acausal["rho"][np.argmax(acausal["cs2"] > 1)] if np.any(acausal["cs2"] > 1) else None
-        summary[model] = {
+        summary[label] = {
             "pnm_fit": dict(zip(("a", "alpha", "b", "beta"), pnm.params.tolist())),
             "snm_fit": dict(zip(("E0", "K", "Q"), snm.params.tolist())) if snm else None,
             "E_pnm_rho0": float(th0["E"][0]), "P_pnm_rho0": float(th0["P"][0]),
@@ -140,13 +150,13 @@ def main():
 
         # --- plots ----------------------------------------------------------------
         r_plot = np.linspace(0.02, max(0.4, rho.max() * 1.2), 200)
-        ax[0].errorbar(rho, E, err, fmt="o", color=c, ms=4, label=f"VMC NV2-{model}")
+        ax[0].errorbar(rho, E, err, fmt="o", color=c, ms=4, label=f"VMC {label}")
         ax[0].plot(r_plot, pnm(r_plot)[0], color=c, lw=1)
         th = thermodynamics(pnm, r_plot)
-        ax[1].plot(th["eps"], th["P"], color=c, label=f"NV2-{model}")
+        ax[1].plot(th["eps"], th["P"], color=c, label=label)
         for b in boots[:30]:
             ax[2].plot(b["R"], b["M"], color=c, alpha=0.08, lw=1)
-        ax[2].plot(star["R"], star["M"], color=c, lw=2, label=f"NV2-{model}")
+        ax[2].plot(star["R"], star["M"], color=c, lw=2, label=label)
 
     for k, item in enumerate(a.compare):
         label, path = item.split(":", 1)
@@ -167,11 +177,11 @@ def main():
     fig.savefig(out.with_suffix("." + a.format), dpi=200, bbox_inches="tight")
     out.with_suffix(".json").write_text(json.dumps(summary, indent=2))
 
-    print(f"\n{'model':6s} {'M_max':>12s} {'R(M_max)':>12s} {'R_1.4':>12s} {'Lambda_1.4':>14s}  E(rho0)  rho_c(Mmax)  cs2>1 at")
+    print(f"\n{'model':14s} {'M_max':>12s} {'R(M_max)':>12s} {'R_1.4':>12s} {'Lambda_1.4':>14s}  E(rho0)  rho_c(Mmax)  cs2>1 at")
     for m, s in summary.items():
         f = lambda k, d=2: f"{s[k]:.{d}f}+-{s[k + '_err']:.{d}f}"  # noqa: E731
         acs = f"{s['rho_cs2_gt_1']:.2f}" if s["rho_cs2_gt_1"] else "-"
-        print(f"{m:6s} {f('M_max'):>12s} {f('R_at_Mmax'):>12s} {f('R_1.4'):>12s} {f('Lambda_1.4', 0):>14s}"
+        print(f"{m:14s} {f('M_max'):>12s} {f('R_at_Mmax'):>12s} {f('R_1.4'):>12s} {f('Lambda_1.4', 0):>14s}"
               f"  {s['E_pnm_rho0']:6.2f}  {s['rho_c_max']:6.2f}       {acs}")
     print("(densities in fm^-3; beyond the largest computed density the EOS is the fit's extrapolation;")
     print(" where c_s^2 would exceed 1 the EOS is continued with c_s^2 = 1 unless --no-causal-cap)")

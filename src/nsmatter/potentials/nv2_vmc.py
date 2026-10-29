@@ -25,6 +25,8 @@ GROUPS = {
     "spin-orbit": ("ls", "lst"),  # L.S, L.S tau.tau
     "quadratic": ("l2", "l2s", "ls2"),  # L^2, L^2 sigma.sigma, (L.S)^2
     "charge-dependent": ("T", "sT", "tnT", "lsT", "tz"),  # T12, sigma.sigma T12, S12 T12, L.S T12, tau_z + tau_z
+    # NV3 three-nucleon force, if included (hamiltonian/three_body.py, potentials/nv3.py)
+    "three-body": ("3b_c1", "3b_c3", "3b_Delta", "3b_D", "3b_E"),
 }
 STATIC = tuple(pair_operators.CHANNELS)  # c s tn t st tnt T sT tnT tz
 MOMENTUM = tuple(ch for ch in momentum.CHANNELS if ch in ("ls", "lst", "lsT", "l2", "l2s", "ls2"))

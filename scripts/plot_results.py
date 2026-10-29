@@ -39,6 +39,7 @@ FORMAT = ["pdf"]  # set from --format
 
 def pops_arg(p):
     p.add_argument("--populations", nargs=4, type=int, default=[7, 7, 0, 0], metavar=("NU", "ND", "PU", "PD"))
+    p.add_argument("--three-body", default=None, help="NV3 model of NV2+3 runs (e.g. Ib*); default NV2 only")
 
 
 # =============================================================================
@@ -50,21 +51,22 @@ def plot_energy(a):
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     bar_data = {}
     for c, model in zip(colors, a.models):
-        recs = [r for r in select(runs, model=model, populations=a.populations) if "components" in r]
+        recs = [r for r in select(runs, model=model, populations=a.populations, three_body=a.three_body) if "components" in r]
+        name = f"NV2-{model}" + (f"+3-{a.three_body}" if a.three_body else "")
         if not recs:
-            print(f"NV2-{model}: no records with an energy decomposition")
+            print(f"{name}: no records with an energy decomposition")
             continue
         rho = np.array([r["density"] for r in recs])
-        for name, ls, lab in (("total", "-", "E/N"), ("kinetic", "--", "kinetic"), ("potential", ":", "potential")):
-            m, e = component(recs, name)
-            ax[0].errorbar(rho, m, e, fmt="o" + ls, color=c, ms=4, lw=1.2, label=f"{lab} NV2-{model}")
+        for key, ls, lab in (("total", "-", "E/N"), ("kinetic", "--", "kinetic"), ("potential", ":", "potential")):
+            m, e = component(recs, key)
+            ax[0].errorbar(rho, m, e, fmt="o" + ls, color=c, ms=4, lw=1.2, label=f"{lab} {name}")
         fg = [r["free_gas_infinite"] for r in recs]
         ax[0].plot(rho, fg, color="gray", lw=0.8, ls="-.", label="free gas" if model == a.models[0] else None)
         for k, g in enumerate(GROUPS):
             m, e = component(recs, f"group_{g}")
             if np.all(np.isnan(m)):
                 continue
-            ax[1].errorbar(rho, m, e, fmt="os^vD"[k] + "-", color=c, ms=4, lw=1, alpha=0.4 + 0.6 * (k + 1) / len(GROUPS),
+            ax[1].errorbar(rho, m, e, fmt="os^vDP"[k % 6] + "-", color=c, ms=4, lw=1, alpha=0.4 + 0.6 * (k + 1) / len(GROUPS),
                            label=f"{g} ({model})")
         k = int(np.argmin(np.abs(rho - a.density)))
         bar_data[model] = recs[k]
@@ -79,11 +81,11 @@ def plot_energy(a):
         vals = [rec["components"].get(f"v_{ch}", [np.nan, np.nan]) for ch in chans]
         m, e = np.array(vals, dtype=float).T
         y = np.arange(len(chans)) + n * width
-        ax[2].barh(y, m, width, xerr=e, color=colors[a.models.index(model)], label=f"NV2-{model}, rho = {rec['density']}")
+        ax[2].barh(y, m, width, xerr=e, color=colors[a.models.index(model)], label=f"NV2-{model}{'+3-' + a.three_body if a.three_body else ''}, rho = {rec['density']}")
     ax[2].set_yticks(np.arange(len(chans)) + 0.4 - width / 2, chans)
     ax[2].invert_yaxis()
     ax[2].axvline(0, color="k", lw=0.5)
-    ax[2].set(xlabel=r"$\langle V_p\rangle/N$ (MeV)", title="NV2 channels")
+    ax[2].set(xlabel=r"$\langle V_p\rangle/N$ (MeV)", title="interaction channels")
     for x in ax:
         if x.get_legend_handles_labels()[0]:
             x.legend(fontsize=7)
@@ -103,7 +105,7 @@ def free_gas_g_same_species(r, rho_species):
 
 def plot_pairs(a):
     runs = load(a.results)
-    recs = [r for d in a.densities for r in select(runs, model=a.model, populations=a.populations, density=d)
+    recs = [r for d in a.densities for r in select(runs, model=a.model, populations=a.populations, density=d, three_body=a.three_body)
             if "structure" in r]
     if not recs:
         raise SystemExit("no records with pair observables for these settings")
@@ -192,7 +194,8 @@ def plot_config(a):
         data = np.load(a.npz)
         title = pathlib.Path(a.npz).stem
     else:
-        recs = [r for r in select(load(a.results), model=a.model, populations=a.populations, density=a.density)
+        recs = [r for r in select(load(a.results), model=a.model, populations=a.populations, density=a.density,
+                              three_body=a.three_body)
                 if r.get("configs")]
         if not recs:
             raise SystemExit("no record with saved configurations for these settings")

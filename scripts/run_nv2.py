@@ -17,6 +17,7 @@ Usage (from ~/projects/nsmatter, venv active):
     python scripts/run_nv2.py --model Ib --density 0.16
     python scripts/run_nv2.py --model IIb --density 0.08 --iterations 150
     python scripts/run_nv2.py --static-only   # no L.S, L^2, (L.S)^2: quick test only
+    python scripts/run_nv2.py --model Ib --three-body Ib*   # NV2+3 (pure neutron matter only)
 
 Parallelism: on CPU the walkers are split over --devices virtual devices (default:
 all cores), one per core. --walkers must be a multiple of --devices.
@@ -57,6 +58,7 @@ from nsmatter.local_energy import make_local_energy, make_local_energy_component
 from nsmatter.observables import CLASSES, make_pair_observables, normalize, spin_vectors  # noqa: E402
 from nsmatter.optimize import apply_update, log_derivatives_spin, sr_direction  # noqa: E402
 from nsmatter.potentials.nv2_vmc import GROUPS, make_nv2_potential, model_key  # noqa: E402
+from nsmatter.potentials.nv3 import CD_CE, make_nv3_potential  # noqa: E402
 from nsmatter.sampler import make_log_prob_spin, metropolis_spin, random_spinors, thermalize_spin, uniform_walkers  # noqa: E402
 from nsmatter.stats import blocking_error  # noqa: E402
 from nsmatter.system import System  # noqa: E402
@@ -73,6 +75,8 @@ def parse_args():
     p.add_argument("--p-down", type=int, default=0)
     p.add_argument("--density", type=float, default=0.16, help="fm^-3")
     p.add_argument("--static-only", action="store_true", help="drop momentum-dependent operators")
+    p.add_argument("--three-body", default=None, choices=sorted(CD_CE),
+                   help="add the NV3 force of this model (e.g. Ib*; same NV2 model as --model); neutron matter only")
     p.add_argument("--n-terms", type=int, default=3)
     p.add_argument("--walkers", type=int, default=256)
     p.add_argument("--batch", type=int, default=4, help="walkers per local-energy chunk (memory)")
@@ -99,12 +103,17 @@ def main():
 
     params, log_psi = make_correlated(system, n_terms=a.n_terms)
     t = jnp.asarray(system.isospins)
-    potential = make_nv2_potential(system, a.model, momentum_terms=not a.static_only)
+    potentials = (make_nv2_potential(system, a.model, momentum_terms=not a.static_only),)
+    if a.three_body:
+        if model_key(a.three_body.rstrip("*")) != model_key(a.model):
+            raise ValueError(f"--three-body {a.three_body} belongs to another NV2 model than --model {a.model}")
+        potentials = potentials + (make_nv3_potential(system, a.three_body),)
+        print(f"three-body force: NV3-{a.three_body} (cD, cE = {CD_CE[a.three_body]})")
 
     # Local energy in chunks of --batch walkers (vmap inside a chunk, sequential
     # over chunks): the momentum operators are memory-hungry.
     # The walkers are split over the devices (pmap), one chunk per core.
-    el_one = make_local_energy(log_psi, (potential,))
+    el_one = make_local_energy(log_psi, potentials)
     n_dev = jax.local_device_count()
     if a.walkers % n_dev:
         raise ValueError(f"--walkers ({a.walkers}) must be a multiple of the number of devices ({n_dev})")
@@ -156,7 +165,7 @@ def main():
     t_opt = time.time() - t0
 
     # --- measurement: energy components and pair observables in one pass ---------
-    comps_one = make_local_energy_components(log_psi, (potential,))
+    comps_one = make_local_energy_components(log_psi, potentials)
     observe = make_pair_observables(system, n_bins=a.bins)
 
     def measure_one(p, r_w, xi_w, t):
@@ -200,7 +209,8 @@ def main():
     t_meas = time.time() - t1
 
     mean, err = blocking_error(series["total"])
-    print(f"\nE/N (variational)   {mean:.4f} +- {err:.4f} MeV   [NV2-{a.model}, rho = {a.density}]")
+    label = f"NV2-{a.model}" + (f" + NV3-{a.three_body}" if a.three_body else "")
+    print(f"\nE/N (variational)   {mean:.4f} +- {err:.4f} MeV   [{label}, rho = {a.density}]")
     components = {k: list(map(float, blocking_error(v))) for k, v in series.items()}
     print("  kinetic   {:9.4f} +- {:.4f}".format(*components["kinetic"]))
     print("  potential {:9.4f} +- {:.4f}".format(*components["potential"]))
@@ -227,7 +237,8 @@ def main():
     # --- outputs ---------------------------------------------------------------------
     out = pathlib.Path(a.out)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    tag = f"{a.model}_rho{a.density:.3f}_{a.n_up}{a.n_down}{a.p_up}{a.p_down}_{stamp}"
+    tag = (f"{a.model}{'+' + a.three_body.replace('*', 's') if a.three_body else ''}"
+           f"_rho{a.density:.3f}_{a.n_up}{a.n_down}{a.p_up}{a.p_down}_{stamp}")
     cfg_path = out.parent / "configs" / f"{tag}.npz"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -245,7 +256,7 @@ def main():
     settings = {k: v for k, v in vars(a).items() if k not in ("out",)}
     record = {
         "model": a.model, "density": a.density, "populations": [a.n_up, a.n_down, a.p_up, a.p_down],
-        "static_only": a.static_only, "walkers": a.walkers, "iterations": a.iterations,
+        "static_only": a.static_only, "three_body": a.three_body, "walkers": a.walkers, "iterations": a.iterations,
         "E_per_N": mean, "error": err,
         "N": N, "L": L, "proton_fraction": system.proton_fraction, "polarization": system.polarization,
         "free_gas_box": free_gas_energy(system) / N, "free_gas_infinite": free_gas_energy_infinite(system) / N,

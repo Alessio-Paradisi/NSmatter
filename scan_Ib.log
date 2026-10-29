@@ -1,7 +1,0 @@
-nohup: ignoring input
-6 points to run (populations (7, 7, 0, 0)); extra options: --walkers 132 --iterations 60 --measurements 40
-[1/6] NV2-Ib rho = 0.04 ... ok (57.2 min)  E/N (variational)   8.3209 +- 0.0879 MeV   [NV2-Ib, rho = 0.04]
-[2/6] NV2-Ib rho = 0.08 ... ok (39.5 min)  E/N (variational)   11.7520 +- 0.1392 MeV   [NV2-Ib, rho = 0.08]
-[3/6] NV2-Ib rho = 0.12 ... ok (38.7 min)  E/N (variational)   15.1053 +- 0.1329 MeV   [NV2-Ib, rho = 0.12]
-[4/6] NV2-Ib rho = 0.16 ... ok (38.1 min)  E/N (variational)   19.1086 +- 0.1232 MeV   [NV2-Ib, rho = 0.16]
-[5/6] NV2-Ib rho = 0.2 ... 

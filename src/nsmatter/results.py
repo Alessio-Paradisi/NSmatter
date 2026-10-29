@@ -30,11 +30,13 @@ def load(pattern):
     return records
 
 
-def select(records, model=None, populations=None, density=None, static_only=False, latest=True):
+def select(records, model=None, populations=None, density=None, static_only=False, three_body=None,
+           latest=True):
     """Records matching the filters, sorted by density.
 
-    latest=True keeps only the last record of each (model, density, populations),
-    so a repeated point replaces the older one.
+    three_body: None selects NV2-only runs, a model name (e.g. "Ib*") NV2+3 runs with
+    that NV3 model, "any" both. latest=True keeps only the last record of each
+    (model, density, populations, three_body), so a repeated point replaces the older one.
     """
     out = []
     for rec in records:
@@ -46,11 +48,13 @@ def select(records, model=None, populations=None, density=None, static_only=Fals
             continue
         if static_only is not None and bool(rec.get("static_only")) != static_only:
             continue
+        if three_body != "any" and rec.get("three_body") != three_body:
+            continue
         out.append(rec)
     if latest:
         last = {}
         for rec in out:
-            last[(rec["model"], round(rec["density"], 6), tuple(rec["populations"]))] = rec
+            last[(rec["model"], round(rec["density"], 6), tuple(rec["populations"]), rec.get("three_body"))] = rec
         out = list(last.values())
     return sorted(out, key=lambda r: r["density"])
 
