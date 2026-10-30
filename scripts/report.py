@@ -179,12 +179,13 @@ def page_eos(pdf, variants, colors):
         bench = afdmc_energy(v.model, v.three_body, r_plot)
         if bench is not None:
             ax[0, 0].plot(r_plot, bench, color=c, ls="--", lw=1, label=f"AFDMC {v.name} ({REFERENCE.split(',')[0]})")
-        for lab, (e, de) in POINTS_RHO0.get((v.model, v.three_body), {}).items():
-            ax[0, 0].errorbar([RHO0], [e], [de], fmt="s", mfc="none", ms=6, color=c, alpha=0.7)
+        for k, (e, de) in enumerate(POINTS_RHO0.get((v.model, v.three_body), {}).values()):
+            ax[0, 0].errorbar([RHO0], [e], [de], fmt="s", mfc="none", ms=6, color=c, alpha=0.7,
+                              label=f"published 66-n values, {v.name}" if k == 0 else None)
     fg = thermodynamics_free_gas(r_plot)
     ax[0, 0].plot(r_plot, fg, color="gray", ls="-.", lw=1, label="free Fermi gas")
     top = max([v.E.max() for v in variants if len(v.E)] + [10.0])
-    ax[0, 0].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel="E/N (MeV)", title="energy per neutron (squares: published 66-n values)",
+    ax[0, 0].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel="E/N (MeV)", title="energy per neutron",
                  xlim=(0, 1.35 * rmax), ylim=(0, 1.5 * top))
     ax[0, 1].axhline(0, color="k", lw=0.5)
     ax[0, 1].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel="(data - fit) / error", title="fit residuals")
