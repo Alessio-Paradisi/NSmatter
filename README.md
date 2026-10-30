@@ -29,12 +29,15 @@ comes from the many-body approximation from the spread between interaction model
 7. [Optimization](#optimization)
 8. [Infinite matter in a periodic box](#infinite-matter-in-a-periodic-box)
 9. [Statistics and error analysis](#statistics-and-error-analysis)
-10. [Validation strategy](#validation-strategy)
-11. [Implementation and infrastructure](#implementation-and-infrastructure)
-12. [Installation and usage](#installation-and-usage)
-13. [Repository layout](#repository-layout)
-14. [Units and conventions](#units-and-conventions)
-15. [References](#references)
+10. [Observables and structure](#observables-and-structure)
+11. [From the equation of state to neutron stars](#from-the-equation-of-state-to-neutron-stars)
+12. [Validation strategy](#validation-strategy)
+13. [Implementation and infrastructure](#implementation-and-infrastructure)
+14. [Installation and usage](#installation-and-usage)
+15. [Outputs and the report](#outputs-and-the-report)
+16. [Repository layout](#repository-layout)
+17. [Units and conventions](#units-and-conventions)
+18. [References](#references)
 
 ---
 
@@ -123,11 +126,25 @@ reference implementation of the same potentials.
 Pure neutron matter is computed with the two-body force alone as well as with the
 three-body force, which allows a clean comparison with two-body BHF. Matter with
 protons is not realistic without three-nucleon forces: two-body potentials alone
-saturate at the wrong density and energy, in VMC as in BHF. NSmatter therefore
-includes the consistent NV3 forces (Piarulli *et al.* 2018): Δ-mediated two-pion
-exchange (Fujita–Miyazawa type, with the anticommutator and commutator structures)
-and the contact terms c_D and c_E, with the same regulators as the two-body model.
+saturate at the wrong density and energy, in VMC as in BHF. NSmatter includes the
+consistent NV3 forces (Piarulli *et al.* 2018; Baroni *et al.* 2018): two-pion
+exchange with the c₁ and c₃ couplings and the Δ(1232) (Fujita–Miyazawa) term, the
+one-pion-exchange–contact term c_D and the three-nucleon contact c_E, with the same
+regulators as the two-body model:
 
+```
+V = Σ_{i<j<k} Σ_cyclic [ a_X {X_ij, X_jk} + a_1 Z(r_ij)Z(r_jk)(σ_i·r̂_ij)(σ_k·r̂_jk)
+                         + a_D X_ik [C_RS(r_ij) + C_RS(r_jk)] + a_E C_RS(r_ij) C_RS(r_jk) ]
+X_ij = Y(r_ij) σ_i·σ_j + T(r_ij) S_ij
+```
+
+(written for neutron matter, where τ_i·τ_j = 1 and the commutator terms vanish).
+Two families of contact couplings exist: the original fits to the trinucleon
+energies and the nd doublet scattering length (NV2+3-Ia … IIb), and the "starred"
+fits that also reproduce the tritium Gamow–Teller matrix element (Ia* … IIb*). The
+original c_E values make pure neutron matter collapse (Lovato *et al.* 2022), so
+neutron matter and neutron stars use the starred models. The couplings are written
+with F_π = 92.4 MeV, the convention in which c_D and c_E are defined.
 ### What the method does not include
 
 Relativistic corrections, hyperons and quark degrees of freedom are outside the
@@ -250,15 +267,34 @@ works with v_T(r) r̂_a r̂_b = w(r) r_a r_b and never divides by r.
 The spin-orbit operator L·S, with L = r_ij × p_ij and S = (σ_i + σ_j)/2, needs the
 first derivatives of Ψ with respect to the relative coordinate of the pair, at each
 target spin configuration; L² and (L·S)² need second derivatives. All of them are
-obtained by automatic differentiation through the full trial wavefunction, so they
-are exact for the given Ψ.
+obtained by automatic differentiation of the trial wavefunction, so they are exact
+for the given Ψ.
+
+These operators dominate the cost: for every pair and every spin target, the first
+and second derivatives of Ψ with respect to the pair's relative coordinate. A move of
+one pair changes only two columns of the Slater matrix, so the ratio Ψ(X′)/Ψ(X) is
+computed by a rank-2 update — the new determinant from a 2×2 determinant, all pair
+ratios of the correlation factor from D′ = E − (GU)R⁻¹E[p,q] — in O(N²) instead of
+O(N³), and only the 2N − 3 correlation amplitudes of pairs that contain the moved
+particles are recomputed. The static operators use the same pair moves at u = 0.
 
 ### Three-body force
 
-The three-body operators act on the spins and isospins of three particles at once.
-They are applied in the same way as the two-body ones: as explicit matrices on
-the three-body spin-isospin states of each triplet, contracted with ratios of the
-wavefunction at the target configurations.
+In neutron matter σ_j enters {X_ij, X_jk} only through {σ_j^a, σ_j^b} = 2δ^ab, so
+
+```
+{X_ij, X_jk} = 2 σ_i · [A(r_ij) A(r_jk)] · σ_k,   A(r) = Y(r) 1 + T(r)(3 r̂r̂ − 1)
+```
+
+acts on the spins of the outer pair only; every NV3 term has this form. The
+three-body force is therefore a sum of pair operators σ_a^α M^αβ(a,b) σ_b^β whose
+3×3 matrices collect the contributions of all middle particles m, and its local
+energy is computed with the same pair machinery as the two-body potential.
+With all periodic images of m and b summed independently, every term factorizes into
+image sums of two-body quantities, Σ_images A(r_am)A(r_mb) = Ā(a,m)·Ā(m,b), so the
+whole force costs O(N³) small matrix products per configuration. In matter with
+protons the isospin structure is genuinely three-body (commutator terms) and the
+operators act on the three-particle spin-isospin targets of each triplet.
 
 ---
 
@@ -368,6 +404,51 @@ are used as a check of the error bars.
 
 ---
 
+## Observables and structure
+
+Besides the energy, each run measures (all per particle, with errors):
+
+- **the energy decomposition**: kinetic energy and the expectation value of every
+  operator channel of NV2 (c, τ, σ, στ, tensor, spin-orbit, L², L²σ, (L·S)², the
+  charge-dependent terms) and of NV3 (c₁, c₃, Δ, c_D, c_E), also summed by operator
+  group. In neutron matter τ·τ = 1, so only group sums such as c + t are
+  basis-independent;
+- **pair distributions** g_nn(r), g_np(r), g_pp(r), with the normalization of
+  Fore *et al.* (2025), and **spin and isospin correlations** ⟨σ_i·σ_j⟩(r),
+  ⟨τ_i·τ_j⟩(r). The operator correlations are computed with local estimators,
+  O_L = Σ_targets ⟨X|O|X′⟩ Ψ(X′)/Ψ(X), so they include the spin-isospin exchange
+  structure of the wavefunction;
+- **total spin and isospin** ⟨S²⟩ and ⟨T²⟩, through Σ_{i<j} σ_i·σ_j = 2S² − 3N/2;
+- **configurations**: positions, spinors and spin directions of all walkers at the
+  end of the run, and trajectories of a few walkers for animations.
+
+The trial wavefunction is built on plane waves and describes uniform matter: the
+snapshots show the correlation hole and the spin pairing of neutrons, not the
+clusters that appear at very low density with wavefunctions able to localize nucleons.
+
+---
+
+## From the equation of state to neutron stars
+
+The energies per particle E/N(ρ) of pure neutron matter are fitted to
+E/N = a u^α + b u^β (u = ρ/ρ₀), symmetric matter to the expansion
+E₀ + K x²/2 + Q x³/6 (x = (ρ − ρ₀)/3ρ₀). From the fits:
+
+- pressure P = ρ² dE/dρ, energy density ε = ρ(m + E/N), speed of sound c_s² = dP/dε;
+- β-equilibrated n p e μ matter with the quadratic isospin expansion
+  E(ρ, x) = E_SNM + S(ρ)(1 − 2x)², μ_n − μ_p = 4S(1 − 2x) + (m_n − m_p) = μ_e = μ_μ;
+- where a fit would become acausal (c_s² > 1), the stiffest causal continuation
+  c_s² = 1 is used;
+- the Tolman–Oppenheimer–Volkoff equations and the l = 2 tidal perturbation give
+  M(R), the maximum mass, R₁.₄ and the tidal deformability Λ(M).
+
+The statistical errors of the VMC energies are propagated to the star by a
+parametric bootstrap (refits of E/N + δ with δ drawn from the error bars). The
+central density of each star is reported next to the largest computed density, so
+the part of a result that rests on the extrapolation of the fit is visible.
+
+---
+
 ## Validation strategy
 
 In VMC a bug rarely crashes the program: it produces a smooth, plausible energy that
@@ -385,7 +466,14 @@ NSmatter is therefore tested against an independent exact result:
 | spin-isospin operators | explicit Pauli matrices on all 16 pair states; exact Hartree–Fock expectation values with spin-isospin exchange |
 | tensor force | S_ij algebra (singlet annihilation, S_ij² = 6 + 2σ·σ − 2S_ij); matrix–vector product over all 2^N spin states with random spinors; exact zero in a closed-shell determinant |
 | optimizer | linear models with known solution; scale invariance; energy and variance reduction |
-| NV2 tables | point-by-point comparison with an independent implementation of the potentials |
+| NV2 | deuteron binding energy and D-state probability, ¹S₀ nn scattering length; line-by-line port of the original Fortran implementation, compared channel by channel |
+| NV2 tables | spline tables against the analytic radial functions; brute-force 16×16 spin-isospin matrices for an np pair |
+| charge-dependent operators | explicit isospin matrices; L·S T_ij = −3 L·S − L·S τ·τ for np pairs |
+| pair moves (rank-2 updates) | full evaluation of Ψ at moved positions, new spinors and swapped isospins (10⁻¹⁵); potential terms with and without the fast path |
+| NV3 | full 2⁸-dimensional spin space of 8 neutrons, three-body operators as explicit matrices (no reduction), every channel |
+| energy decomposition | the channels add up to the total local energy |
+| pair observables | Σ_{i<j} σ_i·σ_j = 2S(S+1) − 3N/2 and the same for τ, exact at every configuration for S², T² eigenstates |
+| EOS and TOV | Schwarzschild interior solution; Newtonian n = 1 polytrope (radius and Love number); thermodynamic consistency, also along β-equilibrium |
 
 At the level of physics results, three cross-checks are used: the two-body PNM
 energies are compared with BHF for the same NV2 model; light-nucleus energies
@@ -461,20 +549,56 @@ For CPU-only machines, replace the CUDA build of JAX with the plain one
 uv run python -c "import jax; print(jax.devices())"
 ```
 
-Example runs:
+Example runs (on a multi-core CPU the walkers are spread over all cores; the number
+of walkers must be a multiple of the number of cores):
 
 ```bash
-# free Fermi gas benchmark: VMC must reproduce the exact box energy
-uv run python scripts/free_gas.py --n-up 7 --n-down 7 --p-up 7 --p-down 7
+# one density: pure neutron matter, 14 neutrons, NV2-Ib (+ NV3-Ib*)
+uv run python scripts/run_nv2.py --model Ib --density 0.16 --walkers 132 --iterations 60 --measurements 40
+uv run python scripts/run_nv2.py --model Ib --three-body "Ib*" --density 0.16 --walkers 132
 
-# optimize a correlated wavefunction and evaluate its energy
-uv run python scripts/optimize_jastrow.py --n-up 7 --n-down 7 --density 0.16
-uv run python scripts/optimize_jastrow.py --help      # all options
+# a density scan (each point in its own process; finished points are skipped on restart)
+uv run python scripts/eos_scan.py --models Ib --densities 0.04 0.08 0.12 0.16 0.20 0.24 \
+    --out results/vmc_Ib.jsonl -- --walkers 132 --iterations 60 --measurements 40
+
+# the complete report (EOS, energy decomposition, structure, neutron stars, quality)
+uv run python scripts/report.py --results results/vmc_Ib.jsonl
+uv run python scripts/report.py --results results/vmc_Ib.jsonl --quality-only
+
+# single figures: neutron stars (also beta equilibrium, comparison data), plots, animations
+uv run python scripts/neutron_star.py --results results/vmc_Ib.jsonl --models Ib
+uv run python scripts/plot_results.py pairs --results results/vmc_Ib.jsonl --model Ib --densities 0.08 0.16
+uv run python scripts/plot_results.py config --results results/vmc_Ib.jsonl --model Ib --density 0.16 --animate
 ```
 
-Each run prints the composition, the box, the device, the optimization history
-(energy, its error, the variance of E_L, acceptance, step size) and the final
-variational energy with its blocking error, and saves the optimized parameters.
+A point of pure neutron matter (14 neutrons, 132 walkers, 60 SR iterations,
+40 measurements) takes about 40 minutes on a 12-core workstation CPU.
+
+---
+
+## Outputs and the report
+
+```
+results/
+├── vmc_<model>.jsonl     one JSON record per run: E/N, energy decomposition, pair
+│                         observables, <S²>, <T²>, free-gas energies, settings,
+│                         optimized parameters, code version, timings
+├── configs/              walker configurations and trajectories of each run (.npz)
+├── logs/                 terminal output of each run
+├── figures/              single figures (PDF) and animations (GIF)
+├── reports/              report.pdf (complete) and quality.pdf
+└── summary/              numerical summaries (e.g. neutron_star.json)
+```
+
+`report.pdf` collects, for every model variant present in the results: an overview
+table; the equation of state with fit, residuals, finite-size-corrected points,
+pressure, speed of sound and published benchmarks; the energy decomposition by
+channel and group; pair distributions and spin correlations (also scaled with k_F);
+the neutron-star sequence with bootstrap bands, M(ρ_c) and Λ(M); configuration
+snapshots; and a quality page for every run. Each run is checked automatically for
+an unconverged optimization (drift), a mismatch between optimization and
+measurement, correlated measurements (τ_int, with the corrected error), badly tuned
+step sizes and the total spin.
 
 ---
 
@@ -491,22 +615,36 @@ NSmatter/
 │   ├── wavefunctions/
 │   │   ├── slater.py           spin-isospin plane-wave Slater determinant
 │   │   ├── jastrow.py          central Jastrow factor
-│   │   └── correlations.py     operator correlations
+│   │   └── correlations.py     operator correlations, rank-2 pair moves
 │   ├── hamiltonian/
 │   │   ├── kinetic.py          kinetic local energy by automatic differentiation
-│   │   ├── central.py          central test potentials, periodic images
+│   │   ├── radial.py           radial functions: Gaussian sums, spline tables, image sums
+│   │   ├── central.py          central test potentials
 │   │   ├── exchange.py         σ·σ, τ·τ by exchange of coordinates
-│   │   ├── pair_operators.py   general pair operators, tensor force
+│   │   ├── pair_operators.py   static pair operators: v6, charge-dependent terms, tensor
 │   │   ├── momentum.py         L·S, L², (L·S)² (with τ·τ and T_ij forms)
-│   │   ├── nv2.py              NV2 radial functions from tables
-│   │   └── three_body.py       NV3 three-nucleon force
-│   ├── local_energy.py         assembles E_L from kinetic and potential terms
+│   │   └── three_body.py       three-nucleon force as pair operators (neutron matter)
+│   ├── potentials/
+│   │   ├── nv2.py              NV2 radial functions (long range, contacts), models, LECs
+│   │   ├── two_body.py         deuteron and ¹S₀ scattering length (validation)
+│   │   ├── nv2_vmc.py          NV2 spline tables and potential term, operator groups
+│   │   └── nv3.py              NV3 couplings and radial functions
+│   ├── local_energy.py         E_L and its decomposition by channel
+│   ├── observables.py          pair distributions, spin-isospin correlations
 │   ├── sampler.py              Metropolis sampling of positions and spinors
 │   ├── optimize.py             stochastic reconfiguration
-│   └── stats.py                blocking analysis, autocorrelation time
-├── potentials/                 generation and validation of the NV2 tables
-├── scripts/                    run scripts (benchmarks, optimization, density scans)
-├── analysis/                   post-processing: fits, symmetry energy, susceptibility
+│   ├── stats.py                blocking analysis, autocorrelation time
+│   ├── eos.py                  EOS fits, thermodynamics, β-equilibrium, causality
+│   ├── tov.py                  TOV and tidal deformability
+│   ├── results.py              loading and selecting run records
+│   ├── benchmarks.py           published reference results
+│   └── plotting.py             drawing of configurations in the periodic box
+├── scripts/
+│   ├── run_nv2.py              one VMC run (optimization + measurement)
+│   ├── eos_scan.py             density scans, restartable
+│   ├── report.py               the complete PDF report
+│   ├── neutron_star.py         EOS fit and neutron stars (β-equilibrium, comparisons)
+│   └── plot_results.py         single figures and animations
 └── tests/                      one test file per module, against exact references
 ```
 
@@ -534,6 +672,9 @@ NSmatter/
   structure of light nuclei*, Phys. Rev. C **94**, 054007 (2016).
 - M. Piarulli *et al.*, *Light-nuclei spectra from chiral dynamics*,
   Phys. Rev. Lett. **120**, 052503 (2018).
+- A. Baroni *et al.*, *Local chiral interactions, the tritium
+  Gamow-Teller matrix element, and the three-nucleon contact term*, Phys. Rev. C **98**,
+  044003 (2018).
 - R. B. Wiringa, V. G. J. Stoks, R. Schiavilla, *Accurate nucleon-nucleon potential
   with charge-independence breaking*, Phys. Rev. C **51**, 38 (1995).
 
@@ -562,5 +703,10 @@ NSmatter/
   spin-polarized isospin-asymmetric nuclear matter*, Phys. Rev. C **66**, 045801 (2002).
 - M. Piarulli *et al.*, *Benchmark calculations of pure neutron matter with realistic
   nucleon-nucleon interactions*, Phys. Rev. C **101**, 045801 (2020).
+- A. Lovato, I. Bombaci, D. Logoteta, M. Piarulli, R. B. Wiringa, *Benchmark
+  calculations of infinite neutron matter with realistic two- and three-nucleon
+  potentials*, Phys. Rev. C **105**, 055808 (2022).
+- T. Hinderer, *Tidal Love numbers of neutron stars*, Astrophys. J. **677**, 1216 (2008);
+  S. Postnikov, M. Prakash, J. M. Lattimer, Phys. Rev. D **82**, 024016 (2010).
 - B. Fore, J. Kim, M. Hjorth-Jensen, A. Lovato, *Investigating the crust of neutron
   stars with neural-network quantum states*, Commun. Phys. **8**, 108 (2025).
