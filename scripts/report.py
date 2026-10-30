@@ -339,12 +339,12 @@ def page_star(pdf, variants, colors):
     ax[1, 1].axis("off")
     if rows:
         t = ax[1, 1].table(cellText=rows, colLabels=["variant", "M_max", "R(M_max)", "R_1.4", "Lambda_1.4",
-                                                     "rho_c(Mmax)", "c_s^2=1 at", "rho max run"],
+                                                     "rho_c\n(M_max)", "c_s^2 = 1\nfrom", "largest\nrun rho"],
                            loc="center", cellLoc="center",
-                           colWidths=[0.2, 0.13, 0.13, 0.13, 0.13, 0.11, 0.1, 0.1])
+                           colWidths=[0.2, 0.13, 0.13, 0.13, 0.12, 0.1, 0.1, 0.1])
         t.auto_set_font_size(False)
         t.set_fontsize(7)
-        t.scale(1.15, 1.8)
+        t.scale(1.15, 2.4)
         ax[1, 1].set_title("pure neutron stars (masses in M_sun, radii km, densities fm^-3)", fontsize=9)
     for a in (ax[0, 0], ax[0, 1], ax[1, 0]):
         if a.get_legend_handles_labels()[0]:
