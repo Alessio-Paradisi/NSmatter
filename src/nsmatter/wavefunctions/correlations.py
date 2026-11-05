@@ -13,9 +13,19 @@ A target changes only columns i and j of the Slater matrix M, so
 with G = M^-1 (rows i, j) and c_i', c_j' the new columns: one inverse for
 all pairs and targets.
 
+Spin-orbit correlations (spin_orbit=True): two more operators,
+    U_ij += u_ls(r) L_ij.S_ij + u_lst(r) L_ij.S_ij tau_i.tau_j,
+L = r x p (r = r_i - r_j, p = -i d/dr), S = (sigma_i + sigma_j)/2, acting on Phi:
+    (L_a Phi)(target) = -i (r x d_r)_a Phi(target),   d_r = (grad_i - grad_j)/2.
+Moving r_i by +u and r_j by -u changes only columns i and j of the Slater matrix,
+whose derivatives are analytic for plane waves (d_u e^{ik.r} = i k e^{ik.r}), so
+    d_u [Phi(target)/Phi] = Dk_ii R_jj - R_ii Dk_jj + Dk_ij R_ji - R_ij Dk_ji
+with Dk[p, q] = G_p . (i k) c_q' and R the 2 x 2 matrix of ratios above.
+
 Radial functions (minimum image, cutoff r_c <= L/2, as the Jastrow):
     u_p(r)  = (1 - x^2)^3 sum_m a_{p,m} x^(2m)          for s, t, st
     u_p(r)  = x^2 (1 - x^2)^3 sum_m a_{p,m} x^(2m)      for tn, tnt
+    u_p(r)  = (1 - x^2)^3 sum_m a_{p,m} x^(2m)          for ls, lst (L is already O(r))
 The extra x^2 makes u_T S12 smooth at r = 0; the code uses
 u_T r^_a r^_b = w r_a r_b / r_c^2 with w = (1 - x^2)^3 sum_m a x^(2m).
 
@@ -33,18 +43,23 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..geometry import minimum_image, occupied_kvectors
-from ..hamiltonian.pair_operators import DOT, SIGMA_SIGMA, pair_index
+from ..hamiltonian.pair_operators import DOT, PAULI, SIGMA_SIGMA, pair_index
 from ..spin import as_spinors
 from ..system import System
 from .jastrow import N_CHANNELS, jastrow_basis, pair_channel
 
 OPERATORS = ("s", "t", "st", "tn", "tnt")
+OPERATORS_SO = OPERATORS + ("ls", "lst")
+# Total pair spin S_a = (sigma_a (x) 1 + 1 (x) sigma_a) / 2 on |s_i s_j>, shape (3, 4, 4).
+_EYE2 = jnp.eye(2, dtype=jnp.complex128)
+S_PAIR = jnp.array([(jnp.kron(PAULI[a], _EYE2) + jnp.kron(_EYE2, PAULI[a])) / 2 for a in range(3)])
 
 
-def make_correlated(system: System, n_terms: int = 3, cutoff: float = None):
+def make_correlated(system: System, n_terms: int = 3, cutoff: float = None, spin_orbit: bool = False):
     """Build exp(J) [1 + sum U_ij] Phi. Returns (params, log_psi).
 
-    params = {"jastrow": (2, n_terms), "corr": (5, n_terms)}, all zero at start
+    params = {"jastrow": (2, n_terms), "corr": (5, n_terms)}, or (7, n_terms) with
+    spin_orbit=True (rows: s, t, st, tn, tnt[, ls, lst]); all zero at start
     (then Psi is exactly the Jastrow-Slater state).
     """
     L = system.box_length
@@ -80,8 +95,9 @@ def make_correlated(system: System, n_terms: int = 3, cutoff: float = None):
 
     params = {
         "jastrow": jnp.zeros((N_CHANNELS, n_terms)),
-        "corr": jnp.zeros((len(OPERATORS), n_terms)),
+        "corr": jnp.zeros((len(OPERATORS_SO if spin_orbit else OPERATORS), n_terms)),
     }
+    ik = 1j * k  # (orb, 3): d/du of the plane waves
     # Target spin states |b_i b_j> in basis order.
     bi = jnp.array([0, 0, 1, 1])
     bj = jnp.array([0, 1, 0, 1])
@@ -97,6 +113,29 @@ def make_correlated(system: System, n_terms: int = 3, cutoff: float = None):
     def contract(G, plane):
         """D[p, q, b, c] = sum_a G[p, a] plane[a, q] sel[a, b, c]: rows of G with every possible new column."""
         return jnp.einsum("pa,aq,abc->pqbc", G, plane, sel)
+
+    def contract_k(G, plane):
+        """Dk[p, q, b, c, x] = sum_a G[p, a] (i k_x) plane[a, q] sel[a, b, c]: derivatives of the columns."""
+        return jnp.einsum("pa,aq,abc,ax->pqbcx", G, plane, sel, ik)
+
+    def ratio_derivatives(D, Dk, t):
+        """d_u [Phi(target)/Phi] for every pair and spin target (moving i by +u, j by -u): (same, swapped)."""
+        ci = (1 - t[i]) // 2
+        cj = (1 - t[j]) // 2
+        P = jnp.arange(n_pairs)
+
+        def ddet2(ci_new, cj_new):
+            d_ii = D[i, i][:, bi, :][P, :, ci_new][..., None]  # (n_pairs, 4, 1)
+            d_ij = D[i, j][:, bj, :][P, :, cj_new][..., None]
+            d_ji = D[j, i][:, bi, :][P, :, ci_new][..., None]
+            d_jj = D[j, j][:, bj, :][P, :, cj_new][..., None]
+            k_ii = Dk[i, i][:, bi][P, :, ci_new]  # (n_pairs, 4, 3)
+            k_ij = Dk[i, j][:, bj][P, :, cj_new]
+            k_ji = Dk[j, i][:, bi][P, :, ci_new]
+            k_jj = Dk[j, j][:, bj][P, :, cj_new]
+            return k_ii * d_jj - d_ii * k_jj + k_ij * d_ji - d_ij * k_ji
+
+        return ddet2(ci, cj), ddet2(cj, ci)
 
     def ratios(D, t):
         """Phi(target) / Phi for every pair and spin target; isospins unchanged and swapped."""
@@ -135,9 +174,20 @@ def make_correlated(system: System, n_terms: int = 3, cutoff: float = None):
         b_cur = pair_index(ta, tb)
         b_sw = pair_index(tb, ta)
         differ = (ta != tb).astype(jnp.float64)
-        amp_same = A_row + B_row * DOT[b_cur, b_cur][:, None]
-        amp_swap = B_row * (DOT[b_cur, b_sw] * differ)[:, None]
-        return amp_same, amp_swap
+        tt_same = DOT[b_cur, b_cur][:, None]
+        tt_swap = (DOT[b_cur, b_sw] * differ)[:, None]
+        amp_same = A_row + B_row * tt_same
+        amp_swap = B_row * tt_swap
+        if not spin_orbit:
+            return amp_same, amp_swap, None, None
+        # u L.S with L_a = -i (r x d_r)_a, d_r = d_u / 2: sum_a s_a L_a -> w . d_u, w = -i/2 u (s x r)
+        s_vec = jnp.einsum("pc,act->pta", bra, S_PAIR)  # <current|S_a|target>, (pairs, 4, 3)
+        sxr = jnp.cross(s_vec, d[:, None, :])  # (pairs, 4, 3)
+        w_ls = -0.5j * u[:, 5, None, None] * sxr
+        w_lst = -0.5j * u[:, 6, None, None] * sxr
+        w_same = w_ls + w_lst * tt_same[..., None]
+        w_swap = w_lst * tt_swap[..., None]
+        return amp_same, amp_swap, w_same, w_swap
 
     def jastrow(params, r, t):
         d = minimum_image(r[i] - r[j], L)
@@ -150,10 +200,14 @@ def make_correlated(system: System, n_terms: int = 3, cutoff: float = None):
         M, plane = columns(r, xi, t)
         sign, logabs = jnp.linalg.slogdet(M)
         G = jnp.linalg.inv(M)  # (particles, orbitals)
-        rho_same, rho_swap = ratios(contract(G, plane), t)
+        D = contract(G, plane)
+        rho_same, rho_swap = ratios(D, t)
         d = minimum_image(r[i] - r[j], L)
-        amp_same, amp_swap = amplitudes(params["corr"], d, xi[i], xi[j], t[i], t[j])
+        amp_same, amp_swap, w_same, w_swap = amplitudes(params["corr"], d, xi[i], xi[j], t[i], t[j])
         correlation = 1.0 + jnp.sum(amp_same * rho_same + amp_swap * rho_swap)
+        if spin_orbit:
+            drho_same, drho_swap = ratio_derivatives(D, contract_k(G, plane), t)
+            correlation = correlation + jnp.sum(w_same * drho_same + w_swap * drho_swap)
         return jastrow(params, r, t) + logabs + jnp.log(sign) + jnp.log(correlation)
 
     # --- pair moves ----------------------------------------------------------------
@@ -165,10 +219,17 @@ def make_correlated(system: System, n_terms: int = 3, cutoff: float = None):
         D = contract(G, plane)
         rho_same, rho_swap = ratios(D, t)
         d = minimum_image(r[i] - r[j], L)
-        amp_same, amp_swap = amplitudes(params["corr"], d, xi[i], xi[j], t[i], t[j])
+        amp_same, amp_swap, w_same, w_swap = amplitudes(params["corr"], d, xi[i], xi[j], t[i], t[j])
         correlation = 1.0 + jnp.sum(amp_same * rho_same + amp_swap * rho_swap)
-        return {"r": r, "xi": xi, "t": t, "M": M, "G": G, "D": D, "amp_same": amp_same,
-                "amp_swap": amp_swap, "log_corr": jnp.log(correlation), "J": jastrow(params, r, t)}
+        cache = {"r": r, "xi": xi, "t": t, "M": M, "G": G, "D": D, "amp_same": amp_same,
+                 "amp_swap": amp_swap, "J": jastrow(params, r, t)}
+        if spin_orbit:
+            Dk = contract_k(G, plane)
+            drho_same, drho_swap = ratio_derivatives(D, Dk, t)
+            correlation = correlation + jnp.sum(w_same * drho_same + w_swap * drho_swap)
+            cache.update(Dk=Dk, w_same=w_same, w_swap=w_swap)
+        cache["log_corr"] = jnp.log(correlation)
+        return cache
 
     def move(params, cache, p, q, u, xp, xq, tp, tq):
         """ln Psi(X') - ln Psi(X), X': r_p + u, r_q - u, spinors xp, xq, isospins tp, tq.
@@ -196,15 +257,26 @@ def make_correlated(system: System, n_terms: int = 3, cutoff: float = None):
         X = GU @ R_inv  # (N, 2); rank-2 correction as broadcast products (fast in XLA)
         D_new = E - X[:, 0, None, None, None] * E[p][None] - X[:, 1, None, None, None] * E[q][None]
         rho_same, rho_swap = ratios(D_new, t)
+        if spin_orbit:  # the same rank-2 update for the derivative columns
+            Ek_new = contract_k(G, plane)  # (N, 2, 2, 2, 3)
+            Ek = jnp.where(mp[..., None], Ek_new[:, 0][:, None], jnp.where(mq[..., None], Ek_new[:, 1][:, None],
+                                                                           cache["Dk"]))
+            Dk_new = Ek - X[:, 0, None, None, None, None] * Ek[p][None] - X[:, 1, None, None, None, None] * Ek[q][None]
+            drho_same, drho_swap = ratio_derivatives(D_new, Dk_new, t)
 
         # Amplitudes: only the 2N - 3 pairs containing p or q change. Their old
         # contribution is replaced by the new one.
         idx = touched[pair_number[p, q]]
         d = minimum_image(r[i[idx]] - r[j[idx]], L)
-        new_same, new_swap = amplitudes(params["corr"], d, xi[i[idx]], xi[j[idx]], t[i[idx]], t[j[idx]])
+        new_same, new_swap, nw_same, nw_swap = amplitudes(params["corr"], d, xi[i[idx]], xi[j[idx]],
+                                                          t[i[idx]], t[j[idx]])
         old_same, old_swap = cache["amp_same"][idx], cache["amp_swap"][idx]
         correlation = (1.0 + jnp.sum(cache["amp_same"] * rho_same + cache["amp_swap"] * rho_swap)
                        + jnp.sum((new_same - old_same) * rho_same[idx] + (new_swap - old_swap) * rho_swap[idx]))
+        if spin_orbit:
+            correlation = (correlation + jnp.sum(cache["w_same"] * drho_same + cache["w_swap"] * drho_swap)
+                           + jnp.sum((nw_same - cache["w_same"][idx]) * drho_same[idx]
+                                     + (nw_swap - cache["w_swap"][idx]) * drho_swap[idx]))
 
         return jastrow(params, r, t) - cache["J"] + jnp.log(det_R) + jnp.log(correlation) - cache["log_corr"]
 

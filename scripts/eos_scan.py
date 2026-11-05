@@ -34,7 +34,7 @@ def done_points(path):
                 rec = json.loads(line)
                 if not rec.get("static_only"):
                     points.add((rec["model"], round(rec["density"], 6), tuple(rec["populations"]),
-                                rec.get("three_body")))
+                                rec.get("three_body"), rec.get("wavefunction", "basic")))
     return points
 
 
@@ -47,6 +47,7 @@ def main():
     a, extra = p.parse_known_args()
     extra = [x for x in extra if x != "--"]
     three_body = extra[extra.index("--three-body") + 1] if "--three-body" in extra else None
+    wf = "LS" if "--spin-orbit-corr" in extra else "basic"
 
     out = pathlib.Path(a.out)
     logs = out.parent / "logs"
@@ -55,11 +56,11 @@ def main():
     nu, nd, pu, pd = pops
 
     todo = [(m, d) for m in a.models for d in a.densities
-            if (m, round(d, 6), pops, three_body) not in done_points(out)]
+            if (m, round(d, 6), pops, three_body, wf) not in done_points(out)]
     print(f"{len(todo)} points to run (populations {pops}); extra options: {' '.join(extra) or '-'}")
     for k, (model, rho) in enumerate(todo):
         tb = f"+{three_body.replace('*', 's')}" if three_body else ""
-        log = logs / f"{model}{tb}_rho{rho:.3f}_{nu}{nd}{pu}{pd}.log"
+        log = logs / f"{model}{tb}{'_LS' if wf == 'LS' else ''}_rho{rho:.3f}_{nu}{nd}{pu}{pd}.log"
         cmd = [sys.executable, str(HERE / "run_nv2.py"), "--model", model, "--density", str(rho),
                "--n-up", str(nu), "--n-down", str(nd), "--p-up", str(pu), "--p-down", str(pd),
                "--out", str(out), *extra]

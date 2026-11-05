@@ -18,6 +18,7 @@ Usage (from ~/projects/nsmatter, venv active):
     python scripts/run_nv2.py --model IIb --density 0.08 --iterations 150
     python scripts/run_nv2.py --static-only   # no L.S, L^2, (L.S)^2: quick test only
     python scripts/run_nv2.py --model Ib --three-body Ib*   # NV2+3 (pure neutron matter only)
+    python scripts/run_nv2.py --model Ib --spin-orbit-corr  # trial wavefunction with L.S correlations
 
 Parallelism: on CPU the walkers are split over --devices virtual devices (default:
 all cores), one per core. --walkers must be a multiple of --devices.
@@ -78,8 +79,11 @@ def parse_args():
     p.add_argument("--three-body", default=None, choices=sorted(CD_CE),
                    help="add the NV3 force of this model (e.g. Ib*; same NV2 model as --model); neutron matter only")
     p.add_argument("--n-terms", type=int, default=3)
+    p.add_argument("--spin-orbit-corr", action="store_true",
+                   help="add spin-orbit correlations u(r) L.S [tau.tau] to the trial wavefunction")
     p.add_argument("--walkers", type=int, default=256)
-    p.add_argument("--batch", type=int, default=4, help="walkers per local-energy chunk (memory)")
+    p.add_argument("--batch", type=int, default=None,
+                   help="walkers per local-energy chunk per core (memory); default 4, or 1 with --spin-orbit-corr")
     p.add_argument("--devices", type=int, default=None, help="CPU devices (default: all cores)")
     p.add_argument("--steps-between", type=int, default=10)
     p.add_argument("--iterations", type=int, default=100)
@@ -95,13 +99,17 @@ def parse_args():
 
 def main():
     a = parse_args()
+    if a.batch is None:  # spin-orbit correlations need about 1.8 GB per walker in flight
+        a.batch = 1 if a.spin_orbit_corr else 4
     system = System(a.n_up, a.n_down, a.p_up, a.p_down, a.density)
     N, L = system.n_particles, system.box_length
     print(system.describe())
     print(f"model NV2-{a.model} ({model_key(a.model)}) | static only: {a.static_only} | devices: {jax.local_device_count()} x {jax.devices()[0].platform}")
     print(f"free gas E/N = {free_gas_energy(system) / N:.4f} MeV")
 
-    params, log_psi = make_correlated(system, n_terms=a.n_terms)
+    params, log_psi = make_correlated(system, n_terms=a.n_terms, spin_orbit=a.spin_orbit_corr)
+    if a.spin_orbit_corr:
+        print("wavefunction: with spin-orbit correlations")
     t = jnp.asarray(system.isospins)
     potentials = (make_nv2_potential(system, a.model, momentum_terms=not a.static_only),)
     if a.three_body:
@@ -238,6 +246,7 @@ def main():
     out = pathlib.Path(a.out)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     tag = (f"{a.model}{'+' + a.three_body.replace('*', 's') if a.three_body else ''}"
+           f"{'_LS' if a.spin_orbit_corr else ''}"
            f"_rho{a.density:.3f}_{a.n_up}{a.n_down}{a.p_up}{a.p_down}_{stamp}")
     cfg_path = out.parent / "configs" / f"{tag}.npz"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,7 +265,8 @@ def main():
     settings = {k: v for k, v in vars(a).items() if k not in ("out",)}
     record = {
         "model": a.model, "density": a.density, "populations": [a.n_up, a.n_down, a.p_up, a.p_down],
-        "static_only": a.static_only, "three_body": a.three_body, "walkers": a.walkers, "iterations": a.iterations,
+        "static_only": a.static_only, "three_body": a.three_body,
+        "wavefunction": "LS" if a.spin_orbit_corr else "basic", "walkers": a.walkers, "iterations": a.iterations,
         "E_per_N": mean, "error": err,
         "N": N, "L": L, "proton_fraction": system.proton_fraction, "polarization": system.polarization,
         "free_gas_box": free_gas_energy(system) / N, "free_gas_infinite": free_gas_energy_infinite(system) / N,

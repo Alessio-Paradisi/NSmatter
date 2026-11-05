@@ -53,7 +53,7 @@ from nsmatter.benchmarks import POINTS_RHO0, REFERENCE, afdmc_energy  # noqa: E4
 from nsmatter.eos import RHO0, causal_cap, eos_table, fit_pnm, thermodynamics  # noqa: E402
 from nsmatter.plotting import draw_walker  # noqa: E402
 from nsmatter.potentials.nv2_vmc import GROUPS  # noqa: E402
-from nsmatter.results import component, configs, load, select, structure  # noqa: E402
+from nsmatter.results import component, configs, load, select, structure, wavefunction  # noqa: E402
 from nsmatter.stats import integrated_autocorrelation_time  # noqa: E402
 from nsmatter.tov import TabulatedEOS, mass_radius  # noqa: E402
 
@@ -67,10 +67,10 @@ A4 = (11.7, 8.3)
 class Variant:
     """Runs of one NV2 model with or without an NV3 force, with fit and stars."""
 
-    def __init__(self, runs, model, three_body, fs_correct, n_boot, rng):
-        self.model, self.three_body = model, three_body
-        self.name = f"NV2-{model}" + (f"+3-{three_body}" if three_body else "")
-        self.recs = select(runs, model=model, populations=PNM, three_body=three_body)
+    def __init__(self, runs, model, three_body, wf, fs_correct, n_boot, rng):
+        self.model, self.three_body, self.wavefunction = model, three_body, wf
+        self.name = f"NV2-{model}" + (f"+3-{three_body}" if three_body else "") + (" (LS corr.)" if wf == "LS" else "")
+        self.recs = select(runs, model=model, populations=PNM, three_body=three_body, wavefunction_kind=wf)
         self.rho = np.array([r["density"] for r in self.recs])
         self.E = np.array([r["E_per_N"] for r in self.recs])
         self.err = np.array([max(r["error"], 1e-3) for r in self.recs])
@@ -124,7 +124,8 @@ def page_overview(pdf, variants, runs, args):
     commit = next((r.get("commit") for v in variants for r in v.recs if r.get("commit")), None)
     lines = [
         f"variants: {', '.join(v.name for v in variants)}   (pure neutron matter, 7 up + 7 down neutrons, periodic box)",
-        f"wavefunction: exp(J) [1 + sum U_ij] Phi (central Jastrow + spin-isospin-tensor correlations, plane-wave Slater)",
+        "wavefunction: exp(J) [1 + sum U_ij] Phi (central Jastrow + spin-isospin-tensor correlations, plane-wave Slater;"
+        " 'LS corr.': also spin-orbit correlations)",
         f"settings: {s.get('walkers', '?')} walkers, {s.get('iterations', '?')} SR iterations, "
         f"{s.get('measurements', '?')} measurements, n_terms {s.get('n_terms', '?')}; code {commit or '?'}",
         f"finite-size correction in fits: {'yes' if args.fs_correct else 'no'};  bootstrap samples: {args.bootstrap}",
@@ -432,7 +433,8 @@ def analyse(rec):
 
 def label(rec):
     tb = f"+3-{rec['three_body']}" if rec.get("three_body") else ""
-    return f"NV2-{rec['model']}{tb}  rho = {rec['density']:.3f}  pops {''.join(map(str, rec['populations']))}"
+    ls = " LS" if wavefunction(rec) == "LS" else ""
+    return f"NV2-{rec['model']}{tb}{ls}  rho = {rec['density']:.3f}  pops {''.join(map(str, rec['populations']))}"
 
 
 def run_page(pdf, rec, a):
@@ -520,7 +522,7 @@ def main():
 
     runs = load(args.results)
     if args.quality_only:
-        recs = sorted(select(runs, three_body="any", static_only=None),
+        recs = sorted(select(runs, three_body="any", static_only=None, wavefunction_kind="any"),
                       key=lambda r: (r.get("three_body") or "", r["model"], tuple(r["populations"]), r["density"]))
         rows = [(r, analyse(r)[0]) for r in recs]
         with PdfPages(out) as pdf:
@@ -533,17 +535,18 @@ def main():
                   f"{a['drift']:+6.2f}  {', '.join(a['flags']) or 'ok'}")
         print(f"\nsaved {out}")
         return
-    keys = sorted({(r["model"], r.get("three_body")) for r in runs
+    keys = sorted({(r["model"], r.get("three_body"), wavefunction(r)) for r in runs
                    if tuple(r["populations"]) == PNM and not r.get("static_only")},
-                  key=lambda k: (k[1] is not None, k[0], k[1] or ""))
+                  key=lambda k: (k[1] is not None, k[0], k[1] or "", k[2]))
     if not keys:
         raise SystemExit("no pure neutron matter runs found")
     rng = np.random.default_rng(args.seed)
-    print("variants:", ", ".join(f"{m}{'+3-' + t if t else ''}" for m, t in keys))
+    print("variants:", ", ".join(f"{m}{'+3-' + t if t else ''}{' LS' if w == 'LS' else ''}" for m, t, w in keys))
     variants = []
-    for m, t in keys:
-        print(f"  fitting and solving TOV for NV2-{m}{'+3-' + t if t else ''} ...", flush=True)
-        variants.append(Variant(runs, m, t, args.fs_correct, args.bootstrap, rng))
+    for m, t, w in keys:
+        print(f"  fitting and solving TOV for NV2-{m}{'+3-' + t if t else ''}{' LS' if w == 'LS' else ''} ...",
+              flush=True)
+        variants.append(Variant(runs, m, t, w, args.fs_correct, args.bootstrap, rng))
     colors = [f"C{k}" for k in range(len(variants))]
 
     with PdfPages(out) as pdf:

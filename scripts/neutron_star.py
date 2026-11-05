@@ -36,7 +36,7 @@ from nsmatter.eos import RHO0, beta_equilibrium, causal_cap, eos_table, fit_pnm,
 from nsmatter.tov import TabulatedEOS, mass_radius  # noqa: E402
 
 
-def load_points(path, model, populations, three_body=None):
+def load_points(path, model, populations, three_body=None, wavefunction="basic"):
     """{density: (E/N, error)} for one model and population set (last run wins).
 
     three_body: None for NV2-only runs, or the NV3 model (e.g. "Ib*") for NV2+3 runs.
@@ -47,7 +47,7 @@ def load_points(path, model, populations, three_body=None):
             continue
         rec = json.loads(line)
         if (rec["model"] == model and tuple(rec["populations"]) == populations and not rec.get("static_only")
-                and rec.get("three_body") == three_body):
+                and rec.get("three_body") == three_body and rec.get("wavefunction", "basic") == wavefunction):
             pts[round(rec["density"], 6)] = (rec["E_per_N"], rec["error"])
     rho = np.array(sorted(pts))
     E = np.array([pts[r][0] for r in rho])
@@ -93,6 +93,8 @@ def main():
     p.add_argument("--snm-file", default=None, help="SNM E/N table if not from VMC")
     p.add_argument("--compare", nargs="*", default=[], help='"label:file" with columns rho E/N [err]')
     p.add_argument("--bootstrap", type=int, default=50)
+    p.add_argument("--wavefunction", default="basic", choices=("basic", "LS"),
+                   help="runs with the basic trial wavefunction or with spin-orbit correlations")
     p.add_argument("--no-causal-cap", action="store_true", help="keep the fit even where c_s^2 > 1")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="neutron_star", help="name of the figure and the summary file")
@@ -107,7 +109,7 @@ def main():
     if len(tb_models) != len(a.models):
         raise SystemExit("--three-body needs one NV3 model per --models entry")
     for c, model, tb in zip(colors, a.models, tb_models):
-        rho, E, err = load_points(a.results, model, (7, 7, 0, 0), tb)
+        rho, E, err = load_points(a.results, model, (7, 7, 0, 0), tb, a.wavefunction)
         label = f"NV2-{model}" + (f"+3-{tb}" if tb else "")
         if len(rho) < 5:
             print(f"{label}: only {len(rho)} PNM points (need >= 5 for the 4-parameter fit), skipped")

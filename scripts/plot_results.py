@@ -40,6 +40,8 @@ FORMAT = ["pdf"]  # set from --format
 def pops_arg(p):
     p.add_argument("--populations", nargs=4, type=int, default=[7, 7, 0, 0], metavar=("NU", "ND", "PU", "PD"))
     p.add_argument("--three-body", default=None, help="NV3 model of NV2+3 runs (e.g. Ib*); default NV2 only")
+    p.add_argument("--wavefunction", default="basic", choices=("basic", "LS"),
+                   help="runs with the basic trial wavefunction or with spin-orbit correlations")
 
 
 # =============================================================================
@@ -51,7 +53,8 @@ def plot_energy(a):
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     bar_data = {}
     for c, model in zip(colors, a.models):
-        recs = [r for r in select(runs, model=model, populations=a.populations, three_body=a.three_body) if "components" in r]
+        recs = [r for r in select(runs, model=model, populations=a.populations, three_body=a.three_body,
+                                  wavefunction_kind=a.wavefunction) if "components" in r]
         name = f"NV2-{model}" + (f"+3-{a.three_body}" if a.three_body else "")
         if not recs:
             print(f"{name}: no records with an energy decomposition")
@@ -105,7 +108,8 @@ def free_gas_g_same_species(r, rho_species):
 
 def plot_pairs(a):
     runs = load(a.results)
-    recs = [r for d in a.densities for r in select(runs, model=a.model, populations=a.populations, density=d, three_body=a.three_body)
+    recs = [r for d in a.densities for r in select(runs, model=a.model, populations=a.populations, density=d, three_body=a.three_body,
+                   wavefunction_kind=a.wavefunction)
             if "structure" in r]
     if not recs:
         raise SystemExit("no records with pair observables for these settings")
@@ -154,7 +158,7 @@ def plot_config(a):
         title = pathlib.Path(a.npz).stem
     else:
         recs = [r for r in select(load(a.results), model=a.model, populations=a.populations, density=a.density,
-                              three_body=a.three_body)
+                              three_body=a.three_body, wavefunction_kind=a.wavefunction)
                 if r.get("configs")]
         if not recs:
             raise SystemExit("no record with saved configurations for these settings")

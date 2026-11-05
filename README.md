@@ -314,7 +314,7 @@ functions for like (nn, pp) and unlike (np) pairs. It suppresses close pairs whe
 short-range repulsion acts.
 
 **Operator correlations** u_p(r) O^p_ij, with O^p running over σ_i·σ_j, τ_i·τ_j,
-(σ_i·σ_j)(τ_i·τ_j), S_ij, S_ij τ_i·τ_j (and spin-orbit terms), build in the spin-isospin
+(σ_i·σ_j)(τ_i·τ_j), S_ij, S_ij τ_i·τ_j, build in the spin-isospin
 structure of the interaction. Without them the tensor and spin-orbit forces average
 to almost exactly zero: in a closed-shell Slater determinant the tensor force gives
 exactly zero, by cubic symmetry, and it contributes to the binding only through
@@ -323,6 +323,12 @@ Applying a pair operator to Φ changes the spin-isospin coordinates of two parti
 that is, two columns of the Slater matrix; the resulting determinants are obtained
 from the inverse of the reference matrix by low-rank updates instead of new
 factorizations.
+
+**Spin-orbit correlations** u_LS(r) L_ij·S_ij and u_LSτ(r) L_ij·S_ij τ_i·τ_j (option
+`--spin-orbit-corr`) let the wavefunction gain the spin-orbit attraction of triplet
+P waves, which averages to almost zero otherwise. L acting on Φ needs the derivatives
+of the two Slater columns of the pair, analytic for plane waves, so these terms use
+the same low-rank updates as the others; they make a run about 2.5 times slower.
 
 **Radial functions.** All correlation functions are expanded on the basis
 
@@ -469,6 +475,7 @@ NSmatter is therefore tested against an independent exact result:
 | NV2 | deuteron binding energy and D-state probability, ¹S₀ nn scattering length; line-by-line port of the original Fortran implementation, compared channel by channel |
 | NV2 tables | spline tables against the analytic radial functions; brute-force 16×16 spin-isospin matrices for an np pair |
 | charge-dependent operators | explicit isospin matrices; L·S T_ij = −3 L·S − L·S τ·τ for np pairs |
+| spin-orbit correlations | the correlation factor built from the definition, L·S applied to Φ at every spin-isospin target with derivatives by automatic differentiation of the determinant |
 | pair moves (rank-2 updates) | full evaluation of Ψ at moved positions, new spinors and swapped isospins (10⁻¹⁵); potential terms with and without the fast path |
 | NV3 | full 2⁸-dimensional spin space of 8 neutrons, three-body operators as explicit matrices (no reduction), every channel |
 | energy decomposition | the channels add up to the total local energy |
