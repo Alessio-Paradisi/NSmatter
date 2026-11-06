@@ -63,7 +63,7 @@ def load_table(path):
 
 def star_from_fits(pnm, snm, beta, cap=True):
     """M(R) sequence for the fitted EOS, plus the central density of the heaviest star."""
-    rho_grid = np.geomspace(1e-4, 1.2, 400)
+    rho_grid = np.geomspace(1e-4, 2.0, 500)  # fm^-3; up to 1.2 the softest EOS had not reached M_max yet
     table = beta_equilibrium(pnm, snm, rho_grid) if beta else thermodynamics(pnm, rho_grid)
     eps, P = eos_table(table)
     start = int(np.searchsorted(table["eps"], eps[0]))

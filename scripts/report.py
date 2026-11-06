@@ -49,7 +49,7 @@ import numpy as np  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from scipy.special import spherical_jn  # noqa: E402
 
-from nsmatter.benchmarks import POINTS_RHO0, REFERENCE, afdmc_energy  # noqa: E402
+from nsmatter.benchmarks import POINTS_RHO0, REFERENCE, afdmc_energy, afdmc_fit  # noqa: E402
 from nsmatter.eos import RHO0, causal_cap, eos_table, fit_pnm, thermodynamics  # noqa: E402
 from nsmatter.plotting import draw_walker  # noqa: E402
 from nsmatter.potentials.nv2_vmc import GROUPS  # noqa: E402
@@ -59,6 +59,7 @@ from nsmatter.tov import TabulatedEOS, mass_radius  # noqa: E402
 
 PNM = (7, 7, 0, 0)
 A4 = (11.7, 8.3)
+RHO_TABLE_MAX = 2.0  # fm^-3, end of the EOS table for the stars
 
 
 # =============================================================================
@@ -97,7 +98,7 @@ class Variant:
 
 def build_star(fit):
     """M(R) sequence of pure neutron matter for a fit, with c_s^2 <= 1 continuation; adds rho_c per star."""
-    rho_grid = np.geomspace(1e-4, 1.2, 400)
+    rho_grid = np.geomspace(1e-4, RHO_TABLE_MAX, 500)
     th = thermodynamics(fit, rho_grid)
     eps, P = eos_table(th)
     start = int(np.searchsorted(th["eps"], eps[0]))
@@ -110,6 +111,8 @@ def build_star(fit):
     star = mass_radius(TabulatedEOS(eps, P))
     star["rho_c"] = np.exp(np.interp(np.log(star["p_c"]), np.log(P), np.log(rho)))
     star["rho_c_max"] = float(star["rho_c"][int(np.argmax(star["M"]))])
+    # heaviest star at the end of the table: the true maximum lies beyond it, M_max is a lower bound
+    star["at_edge"] = bool(star["p_c_max"] >= 0.999 * P[-1])
     star["rho_cap"] = float(np.exp(np.interp(np.log(eps_t), np.log(eps), np.log(rho)))) if eps_t else np.nan
     return star
 
@@ -308,6 +311,12 @@ def page_structure(pdf, variants):
     plt.close(fig)
 
 
+def afdmc_star(variant):
+    """Stars of the published AFDMC fit for this variant's interaction, or None."""
+    fit = afdmc_fit(variant.model, variant.three_body)
+    return None if fit is None else build_star(fit)
+
+
 def page_star(pdf, variants, colors):
     fig, ax = plt.subplots(2, 2, figsize=A4)
     rows = []
@@ -325,8 +334,17 @@ def page_star(pdf, variants, colors):
         ok = np.isfinite(s["Lambda"]) & (s["M"] > 0.8)
         ax[1, 0].plot(s["M"][ok], s["Lambda"][ok], color=c, lw=2, label=v.name)
         f = lambda k, d=2: f"{s[k]:.{d}f} +- {v.spread(k):.{d}f}"  # noqa: E731
-        rows.append([v.name, f("M_max"), f("R_at_Mmax"), f("R_1.4"), f("Lambda_1.4", 0), f"{s['rho_c_max']:.2f}",
+        edge = " (>)" if s["at_edge"] else ""
+        rows.append([v.name, f("M_max") + edge, f("R_at_Mmax"), f("R_1.4"), f("Lambda_1.4", 0),
+                     f"{s['rho_c_max']:.2f}" + edge,
                      f"{s['rho_cap']:.2f}" if np.isfinite(s["rho_cap"]) else "-", f"{v.rho.max():.2f}"])
+        ref = afdmc_star(v)
+        if ref is not None and v.wavefunction == "basic":
+            ax[0, 0].plot(ref["R"], ref["M"], color=c, lw=1, ls="--", label=f"AFDMC fit {v.name}")
+            edge = " (>)" if ref["at_edge"] else ""
+            rows.append([f"AFDMC fit\n{v.name}", f"{ref['M_max']:.2f}" + edge, f"{ref['R_at_Mmax']:.2f}",
+                         f"{ref['R_1.4']:.2f}", f"{ref['Lambda_1.4']:.0f}", f"{ref['rho_c_max']:.2f}" + edge,
+                         f"{ref['rho_cap']:.2f}" if np.isfinite(ref["rho_cap"]) else "-", "-"])
     ax[0, 0].axhline(2.0, color="gray", ls=":", lw=1)
     ax[0, 0].set(xlabel="R (km)", ylabel=r"M (M$_\odot$)", xlim=(8, 16), ylim=(0, 2.8), title="mass-radius")
     ax[0, 1].set(xlabel=r"central density $\rho_c$ (fm$^{-3}$)", ylabel=r"M (M$_\odot$)", xscale="log",
@@ -348,6 +366,9 @@ def page_star(pdf, variants, colors):
         t.set_fontsize(7)
         t.scale(1.15, 2.4)
         ax[1, 1].set_title("pure neutron stars (masses in M_sun, radii km, densities fm^-3)", fontsize=9)
+        ax[1, 1].text(0.5, 0.0, f"(>): heaviest star at the end of the EOS table (rho = {RHO_TABLE_MAX} fm^-3), "
+                      "M_max is a lower bound\nAFDMC fit: the published E/N fit (" + REFERENCE.split(",")[0]
+                      + ") through the same TOV code", transform=ax[1, 1].transAxes, ha="center", fontsize=7)
     for a in (ax[0, 0], ax[0, 1], ax[1, 0]):
         if a.get_legend_handles_labels()[0]:
             a.legend(fontsize=8)
@@ -565,7 +586,11 @@ def main():
         if v.star is not None:
             s = v.star
             print(f"{v.name:16s} M_max {s['M_max']:.2f}  R_1.4 {s['R_1.4']:.2f} km  Lambda_1.4 {s['Lambda_1.4']:.0f}  "
-                  f"rho_c(Mmax) {s['rho_c_max']:.2f}")
+                  f"rho_c(Mmax) {s['rho_c_max']:.2f}" + ("  (end of table: M_max is a lower bound)" if s["at_edge"] else ""))
+            ref = afdmc_star(v) if v.wavefunction == "basic" else None
+            if ref is not None:
+                print(f"{'  AFDMC fit':16s} M_max {ref['M_max']:.2f}  R_1.4 {ref['R_1.4']:.2f} km  "
+                      f"Lambda_1.4 {ref['Lambda_1.4']:.0f}  rho_c(Mmax) {ref['rho_c_max']:.2f}")
         else:
             print(f"{v.name:16s} {len(v.rho)} densities (>= 5 needed for the EOS fit and the star)")
     print(f"saved {out}")
