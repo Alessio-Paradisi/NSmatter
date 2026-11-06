@@ -202,3 +202,86 @@ def causal_cap(eps, P):
     P = P.copy()
     P[k:] = P[k] + (eps[k:] - eps[k])
     return eps, P, float(eps[k])
+
+
+# -----------------------------------------------------------------------------
+# neutron-star crust
+# -----------------------------------------------------------------------------
+# SLy unified EOS (Douchin & Haensel 2001) in the analytic representation of
+# Haensel & Potekhin, A&A 428, 191 (2004), Eq. (14) and Table 1:
+#   zeta = log10(P / dyn cm^-2) as a function of xi = log10(rho / g cm^-3),
+#   rho = eps / c^2 the mass-energy density. Fit accuracy 1-2% in P for xi > 5.
+SLY_A = (6.22, 6.121, 0.005925, 0.16326, 6.48, 11.4971, 19.105, 0.8938, 6.54,
+         11.4950, -22.775, 1.5707, 4.3, 14.08, 27.80, -1.653, 1.50, 14.67)
+MEV_FM3_TO_G_CM3 = 1.782662e12  # eps / c^2
+MEV_FM3_TO_DYN_CM2 = 1.602177e33
+M_U_MEV = 931.494  # atomic mass unit: n_B ~ rho / m_u in the crust (binding < 1%)
+CRUST_CORE_DENSITY = 0.08  # fm^-3, about where SLy's crust ends (0.076 fm^-3)
+
+
+def sly_pressure(eps):
+    """P (MeV fm^-3) of the SLy EOS at energy density eps (MeV fm^-3), analytic fit."""
+    a = (None,) + SLY_A  # 1-based like the paper
+    f0 = lambda x: 1.0 / (np.exp(x) + 1.0)  # noqa: E731
+    xi = np.log10(np.asarray(eps, dtype=float) * MEV_FM3_TO_G_CM3)
+    zeta = ((a[1] + a[2] * xi + a[3] * xi**3) / (1 + a[4] * xi) * f0(a[5] * (xi - a[6]))
+            + (a[7] + a[8] * xi) * f0(a[9] * (a[10] - xi))
+            + (a[11] + a[12] * xi) * f0(a[13] * (a[14] - xi))
+            + (a[15] + a[16] * xi) * f0(a[17] * (a[18] - xi)))
+    return 10.0**zeta / MEV_FM3_TO_DYN_CM2
+
+
+def sly_table(eps_min=1e-9, eps_max=2000.0, n=600):
+    """(eps, P, rho_B) of the full SLy EOS (crust and core), MeV fm^-3 and fm^-3 (rho_B approximate)."""
+    eps = np.geomspace(eps_min, eps_max, n)
+    return eps, sly_pressure(eps), eps / M_U_MEV
+
+
+def attach_crust(eps, P, rho, rho_t=CRUST_CORE_DENSITY):
+    """Core table (eps, P, rho) above rho_t with the SLy crust below it.
+
+    The two are joined at the core pressure P_t = P_core(rho_t): the crust supplies
+    every point with P < P_t, the core every point with P >= P_t. If the core energy
+    density at P_t is below the crust one, the gap is closed by a small jump (a mild
+    first-order step) so that eps(P) stays increasing. Returns (eps, P, rho, P_t).
+    """
+    eps, P, rho = (np.asarray(x, dtype=float) for x in (eps, P, rho))
+    P_t = float(np.exp(np.interp(np.log(rho_t), np.log(rho), np.log(P))))
+    ce, cP, cr = sly_table(eps_max=float(eps[-1]))
+    crust = cP < P_t
+    core = P >= P_t
+    eps_c, P_c, rho_c = ce[crust], cP[crust], cr[crust]
+    if eps[core][0] <= eps_c[-1]:  # keep eps(P) increasing across the junction
+        eps_c, P_c, rho_c = eps_c[eps_c < eps[core][0]], P_c[eps_c < eps[core][0]], rho_c[eps_c < eps[core][0]]
+    return (np.concatenate([eps_c, eps[core]]), np.concatenate([P_c, P[core]]),
+            np.concatenate([rho_c, rho[core]]), P_t)
+
+
+# -----------------------------------------------------------------------------
+# alternative fit form (fixed powers), used for the published AFDMC curves and
+# as a second fit of the VMC data (systematic error of the extrapolation)
+# -----------------------------------------------------------------------------
+class PowerFit:
+    """E/N = sum_k c_k u^p_k with fixed powers p_k, u = rho / rho0; fit(rho) -> (E, dE, d2E)."""
+
+    def __init__(self, coefficients, powers=(2 / 3, 1.0, 2.0), rho0=RHO0):
+        self.c, self.p, self.rho0 = np.asarray(coefficients, dtype=float), tuple(powers), rho0
+
+    def __call__(self, rho):
+        u = np.asarray(rho, dtype=float) / self.rho0
+        E = sum(c * u**p for c, p in zip(self.c, self.p))
+        dE = sum(c * p * u ** (p - 1) for c, p in zip(self.c, self.p)) / self.rho0
+        d2E = sum(c * p * (p - 1) * u ** (p - 2) for c, p in zip(self.c, self.p)) / self.rho0**2
+        return E, dE, d2E
+
+    @property
+    def params(self):
+        return self.c
+
+
+def fit_powers(rho, E, err, powers=(2 / 3, 1.0, 2.0)):
+    """Weighted linear least squares of E/N with fixed powers (the AFDMC fit form of Lovato et al.)."""
+    u = np.asarray(rho, dtype=float) / RHO0
+    A = np.stack([u**p for p in powers], axis=1) / np.asarray(err)[:, None]
+    c, *_ = np.linalg.lstsq(A, np.asarray(E) / np.asarray(err), rcond=None)
+    return PowerFit(c, powers)

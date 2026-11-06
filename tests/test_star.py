@@ -104,3 +104,39 @@ def test_causal_cap():
     assert (np.diff(P2) / np.diff(e2)).max() <= 1 + 1e-9
     k = np.searchsorted(e2, e_t)
     assert np.allclose(P2[: k + 1], P[: k + 1])
+
+
+def test_sly_reproduces_published_stars():
+    """The analytic SLy fit through our TOV: M_max = 2.05 M_sun, R_1.4 = 11.7 km (Douchin & Haensel 2001)."""
+    from nsmatter.eos import sly_table
+
+    eps, P, _ = sly_table(eps_min=1e-8)
+    mr = mass_radius(TabulatedEOS(eps, P))
+    assert abs(mr["M_max"] - 2.05) < 0.02
+    assert abs(mr["R_1.4"] - 11.7) < 0.1
+
+
+def test_attach_crust():
+    """Crust below the junction, core above it, eps(P) increasing, core untouched."""
+    from nsmatter.eos import CRUST_CORE_DENSITY, attach_crust
+
+    th = thermodynamics(PNM, np.geomspace(1e-4, 1.0, 400))
+    eps, P = eos_table(th)
+    rho = th["rho"][: len(eps)]
+    e2, P2, r2, P_t = attach_crust(eps, P, rho)
+    assert np.all(np.diff(P2) > 0) and np.all(np.diff(e2) > 0)
+    assert np.allclose(P2[P2 >= P_t], P[P >= P_t])
+    assert np.isclose(P_t, np.interp(CRUST_CORE_DENSITY, rho, P), rtol=1e-3)
+    assert P2[0] < 1e-6 * P_t  # the crust reaches far below the core
+
+
+def test_fit_powers_recovers_coefficients():
+    from nsmatter.benchmarks import afdmc_energy, afdmc_fit
+    from nsmatter.eos import fit_powers
+
+    rho = np.linspace(0.04, 0.48, 9)
+    fit = fit_powers(rho, afdmc_energy("Ib", "Ib*", rho), np.full(9, 0.1))
+    assert np.allclose(fit.params, afdmc_fit("Ib", "Ib*").params, rtol=1e-8)
+    E, dE, _ = fit(0.2)
+    h = 1e-6
+    assert np.isclose(dE, (fit(0.2 + h)[0] - fit(0.2 - h)[0]) / (2 * h), rtol=1e-6)

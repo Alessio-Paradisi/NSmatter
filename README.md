@@ -451,7 +451,32 @@ E₀ + K x²/2 + Q x³/6 (x = (ρ − ρ₀)/3ρ₀). From the fits:
 The statistical errors of the VMC energies are propagated to the star by a
 parametric bootstrap (refits of E/N + δ with δ drawn from the error bars). The
 central density of each star is reported next to the largest computed density, so
-the part of a result that rests on the extrapolation of the fit is visible.
+the part of a result that rests on the extrapolation of the fit is visible. The EOS
+table extends to 2 fm⁻³; a heaviest star at its end is flagged (its M_max is a
+lower bound).
+
+**Crust.** Below ρ = 0.08 fm⁻³ the neutron-matter core is replaced by the SLy crust
+(Douchin & Haensel 2001), in the analytic representation of Haensel & Potekhin
+(2004); core and crust are joined at the core pressure P(0.08 fm⁻³). Through the
+same TOV code the full SLy EOS gives M_max = 2.05 M☉ and R₁.₄ = 11.7 km, the
+published values (a test). The crust adds about 0.3–0.5 km to R₁.₄ and barely
+changes M_max and Λ₁.₄. `--no-crust` (report.py, neutron_star.py) switches it off.
+
+**Uncertainties.** For every NV2+3 model the report separates
+- *statistical*: the bootstrap spread above;
+- *EOS fit form*: a second fit E/N = a u^{2/3} + b u + c u² (the form of Lovato
+  et al.) against the default one, which measures how much the extrapolation beyond
+  the computed densities depends on the chosen function;
+- *crust*: with minus without the crust;
+- *many-body method*: the published AFDMC fit for the same interaction minus our
+  VMC fit, both through the same TOV code. VMC is a variational upper bound, so this
+  shift is one-sided (AFDMC lower).
+
+Over the NV2+3 models the combined result is the mean, with the *interaction*
+uncertainty taken as half the spread between the models (the cutoff and fit
+dependence of the Norfolk family), and the other systematics as the largest shift
+over the models (many-body: the mean shift). They are listed separately and added
+in quadrature. Quantities: E/N and P of neutron matter at ρ₀, M_max, R₁.₄, Λ₁.₄.
 
 ---
 
@@ -481,6 +506,7 @@ NSmatter is therefore tested against an independent exact result:
 | energy decomposition | the channels add up to the total local energy |
 | pair observables | Σ_{i<j} σ_i·σ_j = 2S(S+1) − 3N/2 and the same for τ, exact at every configuration for S², T² eigenstates |
 | EOS and TOV | Schwarzschild interior solution; Newtonian n = 1 polytrope (radius and Love number); thermodynamic consistency, also along β-equilibrium |
+| crust | the full SLy EOS reproduces its published M_max and R₁.₄; crust and core joined with ε(P) increasing |
 
 At the level of physics results, three cross-checks are used: the two-body PNM
 energies are compared with BHF for the same NV2 model; light-nucleus energies
@@ -594,15 +620,19 @@ results/
 ├── logs/                 terminal output of each run
 ├── figures/              single figures (PDF) and animations (GIF)
 ├── reports/              report.pdf (complete) and quality.pdf
-└── summary/              numerical summaries (e.g. neutron_star.json)
+└── summary/              numerical summaries (neutron_star.json, report_errors.json:
+                          every model, every uncertainty, the combined result)
 ```
 
 `report.pdf` collects, for every model variant present in the results: an overview
 table; the equation of state with fit, residuals, finite-size-corrected points,
 pressure, speed of sound and published benchmarks; the energy decomposition by
 channel and group; pair distributions and spin correlations (also scaled with k_F);
-the neutron-star sequence with bootstrap bands, M(ρ_c) and Λ(M); configuration
-snapshots; and a quality page for every run. Each run is checked automatically for
+the neutron-star sequence with bootstrap bands, M(ρ_c) and Λ(M); the uncertainty
+pages (EOS and M(R) bands of the models against the AFDMC fits, the error budget
+table and the shift of every model); configuration snapshots; and a quality page for
+every run. The energy decomposition has one page per NV2 model; a variant computed at
+a single density is drawn as star markers. Each run is checked automatically for
 an unconverged optimization (drift), a mismatch between optimization and
 measurement, correlated measurements (τ_int, with the corrected error), badly tuned
 step sizes and the total spin.
@@ -715,5 +745,9 @@ NSmatter/
   potentials*, Phys. Rev. C **105**, 055808 (2022).
 - T. Hinderer, *Tidal Love numbers of neutron stars*, Astrophys. J. **677**, 1216 (2008);
   S. Postnikov, M. Prakash, J. M. Lattimer, Phys. Rev. D **82**, 024016 (2010).
+- F. Douchin, P. Haensel, *A unified equation of state of dense matter and neutron
+  star structure*, Astron. Astrophys. **380**, 151 (2001) (SLy).
+- P. Haensel, A. Y. Potekhin, *Analytical representations of unified equations of
+  state of neutron-star matter*, Astron. Astrophys. **428**, 191 (2004).
 - B. Fore, J. Kim, M. Hjorth-Jensen, A. Lovato, *Investigating the crust of neutron
   stars with neural-network quantum states*, Commun. Phys. **8**, 108 (2025).

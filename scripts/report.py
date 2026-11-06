@@ -39,6 +39,7 @@ The full report takes about a minute (bootstrap of the TOV solutions), longer wh
 """
 
 import argparse
+import json
 import pathlib
 
 import matplotlib
@@ -50,7 +51,8 @@ from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from scipy.special import spherical_jn  # noqa: E402
 
 from nsmatter.benchmarks import POINTS_RHO0, REFERENCE, afdmc_energy, afdmc_fit  # noqa: E402
-from nsmatter.eos import RHO0, causal_cap, eos_table, fit_pnm, thermodynamics  # noqa: E402
+from nsmatter.eos import (  # noqa: E402
+    CRUST_CORE_DENSITY, RHO0, attach_crust, causal_cap, eos_table, fit_pnm, fit_powers, thermodynamics)
 from nsmatter.plotting import draw_walker  # noqa: E402
 from nsmatter.potentials.nv2_vmc import GROUPS  # noqa: E402
 from nsmatter.results import component, configs, load, select, structure, wavefunction  # noqa: E402
@@ -61,6 +63,8 @@ PNM = (7, 7, 0, 0)
 A4 = (11.7, 8.3)
 RHO_TABLE_MAX = 2.0  # fm^-3, end of the EOS table for the stars
 R_MIN_PLOT = 0.15  # fm, pair-distribution bins below this are not plotted (too few pairs)
+MODEL_ORDER = {"Ia": 0, "Ib": 1, "IIa": 2, "IIb": 3}
+CRUST = True  # SLy crust below CRUST_CORE_DENSITY under the neutron-matter core (--no-crust: none)
 
 
 # =============================================================================
@@ -97,8 +101,13 @@ class Variant:
         return float(np.std(vals)) if len(vals) > 1 else np.nan
 
 
-def build_star(fit):
-    """M(R) sequence of pure neutron matter for a fit, with c_s^2 <= 1 continuation; adds rho_c per star."""
+def build_star(fit, crust=None):
+    """M(R) sequence of pure neutron matter for a fit, with c_s^2 <= 1 continuation; adds rho_c per star.
+
+    crust: SLy crust below CRUST_CORE_DENSITY (default: the module setting CRUST).
+    Also stores E/N and P of neutron matter at rho0 ("E_rho0", "P_rho0") for the error budget.
+    """
+    crust = CRUST if crust is None else crust
     rho_grid = np.geomspace(1e-4, RHO_TABLE_MAX, 500)
     th = thermodynamics(fit, rho_grid)
     eps, P = eos_table(th)
@@ -109,11 +118,15 @@ def build_star(fit):
         k = int(np.searchsorted(eps, eps_t))
         dlog = np.diff(eps[k:]) / (0.5 * (eps[k:-1] + eps[k + 1:]) + 0.5 * (P[k:-1] + P[k + 1:]))
         rho[k + 1:] = rho[k] * np.exp(np.cumsum(dlog))
+    if crust:
+        eps, P, rho, _ = attach_crust(eps, P, rho)
     star = mass_radius(TabulatedEOS(eps, P))
     star["rho_c"] = np.exp(np.interp(np.log(star["p_c"]), np.log(P), np.log(rho)))
     star["rho_c_max"] = float(star["rho_c"][int(np.argmax(star["M"]))])
     # heaviest star at the end of the table: the true maximum lies beyond it, M_max is a lower bound
     star["at_edge"] = bool(star["p_c_max"] >= 0.999 * P[-1])
+    th0 = thermodynamics(fit, np.array([RHO0]))
+    star["E_rho0"], star["P_rho0"] = float(th0["E"][0]), float(th0["P"][0])
     star["rho_cap"] = float(np.exp(np.interp(np.log(eps_t), np.log(eps), np.log(rho)))) if eps_t else np.nan
     return star
 
@@ -224,18 +237,26 @@ def page_decomposition(pdf, variants, colors):
         if not recs:
             continue
         rho = np.array([r["density"] for r in recs])
+        single = len(rho) == 1  # one density only: big star markers, no lines
+        note = f" (rho = {rho[0]} only)" if single else ""
         for key, ls in (("kinetic", "--"), ("potential", ":"), ("total", "-")):
             m, e = component(recs, key)
-            ax[0, 0].errorbar(rho, m, e, fmt="o" + ls, color=c, ms=4, lw=1, label=f"{key} {v.name}")
-        ls = ["-", "--", ":", "-."][colors.index(c) % 4]
+            label = f"{key} {v.name}" if not single else (
+                f"kinetic, potential, total {v.name}{note}" if key == "total" else None)
+            ax[0, 0].errorbar(rho, m, e, fmt="*" if single else "o" + ls, color=c, ms=10 if single else 4, lw=1,
+                              label=label)
+        ls = "none" if single else ["-", "--", ":", "-."][colors.index(c) % 4]
         for k, g in enumerate(GROUPS):
             m, e = component(recs, f"group_{g}")
             if np.all(np.isnan(m)):
                 continue
-            ax[0, 1].errorbar(rho, m, e, fmt="os^vDP"[k % 6], ls=ls, color=f"C{k}", ms=4, lw=1,
-                              label=g if g not in labelled else None)
+            ax[0, 1].errorbar(rho, m, e, fmt="*" if single else "os^vDP"[k % 6], ls=ls, color=f"C{k}",
+                              ms=10 if single else 4, lw=1, label=g if g not in labelled else None)
             labelled.add(g)
-        ax[0, 1].plot([], [], ls=ls, color="k", label=f"line: {v.name}")
+        if single:
+            ax[0, 1].plot([], [], "*", color="k", ms=8, label=f"star: {v.name}{note}")
+        else:
+            ax[0, 1].plot([], [], ls=ls, color="k", label=f"line: {v.name}")
         at_rho0.append((v, c, recs[int(np.argmin(np.abs(rho - RHO0)))]))
     ax[0, 0].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel="MeV per neutron", title="kinetic and potential energy")
     ax[0, 1].axhline(0, color="k", lw=0.5)
@@ -274,8 +295,8 @@ def page_decomposition(pdf, variants, colors):
     for x in (ax[0, 0], ax[0, 1], ax[1, 0]):
         if x.get_legend_handles_labels()[0]:
             x.legend(fontsize=6.5)
-    fig.suptitle("Energy decomposition (in neutron matter only the group sums of c/t and s/st are basis-independent)",
-                 fontsize=11)
+    fig.suptitle(f"Energy decomposition, NV2-{variants[0].model} (in neutron matter only the group sums of c/t and "
+                 "s/st are basis-independent)", fontsize=11)
     fig.tight_layout()
     pdf.savefig(fig)
     plt.close(fig)
@@ -326,9 +347,140 @@ def afdmc_star(variant):
     return None if fit is None else build_star(fit)
 
 
+QUANTITIES = (("E_rho0", "E/N(rho0)\n(MeV)", 2), ("P_rho0", "P(rho0)\n(MeV fm^-3)", 2), ("M_max", "M_max\n(M_sun)", 2),
+              ("R_1.4", "R_1.4\n(km)", 2), ("Lambda_1.4", "Lambda_1.4", 0))
+
+
+def error_budget(variants):
+    """Statistical and systematic uncertainties of the NV2+3 results.
+
+    For every NV2+3 model with a fit (standard wavefunction):
+      stat       bootstrap spread (VMC error bars propagated through fit and TOV)
+      fit form   alternative fit a u^2/3 + b u + c u^2 minus the default a u^alpha + b u^beta
+                 (how much the extrapolation beyond the computed densities depends on the fit)
+      crust      SLy crust minus no crust
+      many-body  published AFDMC fit minus our VMC (the variational bias; one-sided: VMC is an upper bound)
+    Combined over the models: central value = mean, interaction = half of the max-min range
+    (the cutoff and fit dependence of the Norfolk family), the other systematics = largest
+    |shift| over the models (many-body: mean shift over the models with an AFDMC fit).
+    """
+    rows = []
+    for v in variants:
+        if v.three_body is None or v.wavefunction != "basic" or v.star is None:
+            continue
+        base = v.star
+        alt = build_star(fit_powers(v.rho, v.E_fit_data, v.err))
+        bare = build_star(v.fit, crust=False)
+        ref = afdmc_star(v)
+        q = {}
+        for key, _, _ in QUANTITIES:
+            q[key] = {"value": base[key], "stat": v.spread(key), "fit form": alt[key] - base[key],
+                      "crust": base[key] - bare[key], "many-body": ref[key] - base[key] if ref else np.nan}
+        rows.append((v, q))
+    if not rows:
+        return rows, {}
+    combined = {}
+    for key, _, _ in QUANTITIES:
+        vals = np.array([q[key]["value"] for _, q in rows])
+        mb = np.array([q[key]["many-body"] for _, q in rows])
+        c = {"value": float(vals.mean()),
+             "stat": float(np.sqrt(np.nanmean([q[key]["stat"] ** 2 for _, q in rows]))),
+             "interaction": float(0.5 * (vals.max() - vals.min())) if len(vals) > 1 else np.nan,
+             "fit form": float(np.max([abs(q[key]["fit form"]) for _, q in rows])),
+             "crust": float(np.max([abs(q[key]["crust"]) for _, q in rows])),
+             "many-body": float(np.nanmean(mb)) if np.isfinite(mb).any() else np.nan}
+        parts = [c[k] for k in ("stat", "interaction", "fit form", "crust", "many-body")]
+        c["total"] = float(np.sqrt(np.nansum(np.square(parts))))
+        combined[key] = c
+    return rows, combined
+
+
+def page_systematics(pdf, variants, colors):
+    rows, combined = error_budget(variants)
+    if not rows:
+        return
+    color = {id(v): c for v, c in zip(variants, colors)}
+    # --- page 1: bands --------------------------------------------------------
+    fig, ax = plt.subplots(1, 2, figsize=A4)
+    r_plot = np.linspace(0.02, 0.5, 200)
+    vmc = np.array([v.fit(r_plot)[0] for v, _ in rows])
+    ax[0].fill_between(r_plot, vmc.min(0), vmc.max(0), color="gray", alpha=0.25, label="VMC fits, all models (this work)")
+    afd = [afdmc_fit(v.model, v.three_body) for v, _ in rows]
+    afd = np.array([f(r_plot)[0] for f in afd if f is not None])
+    if len(afd):
+        ax[0].fill_between(r_plot, afd.min(0), afd.max(0), facecolor="none", hatch="///", edgecolor="k", lw=0.5,
+                           label=f"AFDMC fits, same models ({REFERENCE.split(',')[0]})")
+    for v, _ in rows:
+        ax[0].errorbar(v.rho, v.E, v.err, fmt="o", ms=3, color=color[id(v)], alpha=0.8, label=v.name)
+    ax[0].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel="E/N (MeV)", title="neutron-matter EOS: spread of the NV2+3 models")
+    ax[0].legend(fontsize=7)
+    for v, _ in rows:
+        ax[1].plot(v.star["R"], v.star["M"], color=color[id(v)], lw=1.8, label=f"VMC {v.name}")
+        ref = afdmc_star(v)
+        if ref is not None:
+            ax[1].plot(ref["R"], ref["M"], color=color[id(v)], lw=1, ls="--")
+    ax[1].plot([], [], color="gray", ls="--", lw=1, label="AFDMC fit, same model")
+    ax[1].axhline(2.0, color="gray", ls=":", lw=1)
+    ax[1].set(xlabel="R (km)", ylabel=r"M (M$_\odot$)", xlim=(8, 16), ylim=(0, 2.8),
+              title="mass-radius: models (colours) and method (solid/dashed)")
+    ax[1].legend(fontsize=8)
+    fig.suptitle("Uncertainties: interaction model and many-body method", fontsize=12)
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
+
+    # --- page 2: tables -------------------------------------------------------
+    fig = plt.figure(figsize=A4)
+    fmt = lambda x, d: "-" if not np.isfinite(x) else f"{x:+.{d}f}"  # noqa: E731
+    head = ["", *[lab for _, lab, _ in QUANTITIES]]
+    top = []
+    for v, q in rows:
+        top.append([v.name, *[f"{q[k]['value']:.{d}f} +- {q[k]['stat']:.{d}f}" for k, _, d in QUANTITIES]])
+    c = combined
+    top.append(["combined (mean)", *[f"{c[k]['value']:.{d}f}" for k, _, d in QUANTITIES]])
+    for src, lab in (("stat", "statistical (VMC)"), ("interaction", "interaction (half range of models)"),
+                     ("fit form", "EOS fit form (largest)"), ("crust", "crust (largest)"),
+                     ("many-body", "many-body: AFDMC - VMC (mean)"), ("total", "total (in quadrature)")):
+        top.append([lab, *[("+-" if src != "many-body" else "") + (f"{c[k][src]:.{d}f}" if src != "many-body"
+                                                                   else fmt(c[k][src], d)) for k, _, d in QUANTITIES]])
+    ax = fig.add_axes([0.04, 0.47, 0.92, 0.45])
+    ax.axis("off")
+    t = ax.table(cellText=top, colLabels=head, loc="upper center", cellLoc="center",
+                 colWidths=[0.26] + [0.148] * len(QUANTITIES))
+    t.auto_set_font_size(False)
+    t.set_fontsize(8)
+    t.scale(1, 1.45)
+    for (row, col), cell in t.get_celld().items():
+        if row == 0:
+            cell.set_height(1.7 * cell.get_height())
+        if row == len(rows) + 1 or row == len(top):
+            cell.set_text_props(weight="bold")
+    ax.set_title("Results of the NV2+3 models with uncertainties (pure neutron matter, 14 neutrons)", fontsize=11)
+
+    detail = []
+    for v, q in rows:
+        for src in ("fit form", "crust", "many-body"):
+            detail.append([v.name if src == "fit form" else "", src, *[fmt(q[k][src], d) for k, _, d in QUANTITIES]])
+    ax = fig.add_axes([0.04, 0.03, 0.92, 0.40])
+    ax.axis("off")
+    t = ax.table(cellText=detail, colLabels=["model", "shift", *[lab for _, lab, _ in QUANTITIES]], loc="upper center",
+                 cellLoc="center", colWidths=[0.17, 0.09] + [0.148] * len(QUANTITIES))
+    t.auto_set_font_size(False)
+    t.set_fontsize(7)
+    t.scale(1, 1.15)
+    for (row, _), cell in t.get_celld().items():
+        if row == 0:
+            cell.set_height(1.7 * cell.get_height())
+    ax.set_title("systematic shifts per model (alternative minus default; many-body: AFDMC fit minus VMC, '-' if not "
+                 "published)", fontsize=9)
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
 def page_star(pdf, variants, colors):
     fig, ax = plt.subplots(2, 2, figsize=A4)
     rows = []
+    dashed = False
     for v, c in zip(variants, colors):
         if v.star is None:
             continue
@@ -349,11 +501,10 @@ def page_star(pdf, variants, colors):
                      f"{s['rho_cap']:.2f}" if np.isfinite(s["rho_cap"]) else "-", f"{v.rho.max():.2f}"])
         ref = afdmc_star(v)
         if ref is not None and v.wavefunction == "basic":
-            ax[0, 0].plot(ref["R"], ref["M"], color=c, lw=1, ls="--", label=f"AFDMC fit {v.name}")
-            edge = " (>)" if ref["at_edge"] else ""
-            rows.append([f"AFDMC fit\n{v.name}", f"{ref['M_max']:.2f}" + edge, f"{ref['R_at_Mmax']:.2f}",
-                         f"{ref['R_1.4']:.2f}", f"{ref['Lambda_1.4']:.0f}", f"{ref['rho_c_max']:.2f}" + edge,
-                         f"{ref['rho_cap']:.2f}" if np.isfinite(ref["rho_cap"]) else "-", "-"])
+            ax[0, 0].plot(ref["R"], ref["M"], color=c, lw=1, ls="--")
+            dashed = True
+    if dashed:
+        ax[0, 0].plot([], [], color="gray", lw=1, ls="--", label="dashed: AFDMC fit, same model")
     ax[0, 0].axhline(2.0, color="gray", ls=":", lw=1)
     ax[0, 0].set(xlabel="R (km)", ylabel=r"M (M$_\odot$)", xlim=(8, 16), ylim=(0, 2.8), title="mass-radius")
     ax[0, 1].set(xlabel=r"central density $\rho_c$ (fm$^{-3}$)", ylabel=r"M (M$_\odot$)", xscale="log",
@@ -373,16 +524,17 @@ def page_star(pdf, variants, colors):
                            colWidths=[0.2, 0.13, 0.13, 0.13, 0.12, 0.1, 0.1, 0.1])
         t.auto_set_font_size(False)
         t.set_fontsize(7)
-        t.scale(1.15, 2.4)
+        t.scale(1.15, 1.9)
         ax[1, 1].set_title("pure neutron stars (masses in M_sun, radii km, densities fm^-3)", fontsize=9)
         ax[1, 1].text(0.5, 0.0, f"(>): heaviest star at the end of the EOS table (rho = {RHO_TABLE_MAX} fm^-3), "
-                      "M_max is a lower bound\nAFDMC fit: the published E/N fit (" + REFERENCE.split(",")[0]
-                      + ") through the same TOV code", transform=ax[1, 1].transAxes, ha="center", fontsize=7)
+                      "M_max is a lower bound\nAFDMC values: see the uncertainty pages", transform=ax[1, 1].transAxes,
+                      ha="center", fontsize=7)
     for a in (ax[0, 0], ax[0, 1], ax[1, 0]):
         if a.get_legend_handles_labels()[0]:
             a.legend(fontsize=8)
-    fig.suptitle("Neutron stars from the VMC equation of state\n(pure neutron matter, no crust; beyond the largest "
-                 "computed density the EOS is the fit's extrapolation)", fontsize=10)
+    crust = (f"SLy crust below {CRUST_CORE_DENSITY} fm^-3 (Haensel & Potekhin 2004)" if CRUST else "no crust")
+    fig.suptitle(f"Neutron stars from the VMC equation of state\n(pure neutron matter core, {crust}; beyond the "
+                 "largest computed density the EOS is the fit's extrapolation)", fontsize=10)
     fig.tight_layout()
     pdf.savefig(fig)
     plt.close(fig)
@@ -545,8 +697,11 @@ def main():
     p.add_argument("--no-quality", action="store_true", help="skip the per-run quality pages")
     p.add_argument("--quality-only", action="store_true", help="only the quality table and pages (fast)")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--no-crust", action="store_true", help="stars without the SLy crust")
     p.add_argument("--out", default=None, help="default results/reports/report.pdf (or quality.pdf)")
     args = p.parse_args()
+    global CRUST
+    CRUST = not args.no_crust
     out = pathlib.Path(args.out or ("results/reports/quality.pdf" if args.quality_only else "results/reports/report.pdf"))
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -567,7 +722,7 @@ def main():
         return
     keys = sorted({(r["model"], r.get("three_body"), wavefunction(r)) for r in runs
                    if tuple(r["populations"]) == PNM and not r.get("static_only")},
-                  key=lambda k: (k[1] is not None, k[0], k[1] or "", k[2]))
+                  key=lambda k: (MODEL_ORDER.get(k[0], 9), k[1] is not None, k[2] != "basic"))
     if not keys:
         raise SystemExit("no pure neutron matter runs found")
     rng = np.random.default_rng(args.seed)
@@ -582,9 +737,12 @@ def main():
     with PdfPages(out) as pdf:
         page_overview(pdf, variants, runs, args)
         page_eos(pdf, variants, colors)
-        page_decomposition(pdf, variants, colors)
+        for model in dict.fromkeys(v.model for v in variants):  # one page per NV2 model
+            sub = [(v, c) for v, c in zip(variants, colors) if v.model == model]
+            page_decomposition(pdf, [v for v, _ in sub], [c for _, c in sub])
         page_structure(pdf, variants)
         page_star(pdf, variants, colors)
+        page_systematics(pdf, variants, colors)
         page_snapshots(pdf, variants)
         if not args.no_quality:
             rows = [(r, analyse(r)[0]) for v in variants for r in v.recs]
@@ -602,6 +760,20 @@ def main():
                       f"Lambda_1.4 {ref['Lambda_1.4']:.0f}  rho_c(Mmax) {ref['rho_c_max']:.2f}")
         else:
             print(f"{v.name:16s} {len(v.rho)} densities (>= 5 needed for the EOS fit and the star)")
+    rows, combined = error_budget(variants)
+    if combined:
+        print("\nNV2+3 models combined (mean +- stat +- interaction +- fit form +- crust; many-body = AFDMC - VMC):")
+        for key, _, d in QUANTITIES:
+            c = combined[key]
+            print(f"  {key:11s} {c['value']:8.{d}f} +- {c['stat']:.{d}f} +- {c['interaction']:.{d}f} "
+                  f"+- {c['fit form']:.{d}f} +- {c['crust']:.{d}f}   many-body {c['many-body']:+.{d}f}   "
+                  f"total +- {c['total']:.{d}f}")
+        summary = pathlib.Path("results/summary") / f"{out.stem}_errors.json"
+        summary.parent.mkdir(parents=True, exist_ok=True)
+        summary.write_text(json.dumps({"combined": combined,
+                                       "models": {v.name: q for v, q in rows},
+                                       "crust": CRUST}, indent=2, default=float))
+        print(f"saved {summary}")
     print(f"saved {out}")
 
 

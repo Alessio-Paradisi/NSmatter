@@ -32,7 +32,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from nsmatter.eos import RHO0, beta_equilibrium, causal_cap, eos_table, fit_pnm, fit_snm, thermodynamics  # noqa: E402
+from nsmatter.eos import (  # noqa: E402
+    RHO0, attach_crust, beta_equilibrium, causal_cap, eos_table, fit_pnm, fit_snm, thermodynamics)
 from nsmatter.tov import TabulatedEOS, mass_radius  # noqa: E402
 
 
@@ -61,7 +62,7 @@ def load_table(path):
     return d[:, 0], d[:, 1], err
 
 
-def star_from_fits(pnm, snm, beta, cap=True):
+def star_from_fits(pnm, snm, beta, cap=True, crust=True):
     """M(R) sequence for the fitted EOS, plus the central density of the heaviest star."""
     rho_grid = np.geomspace(1e-4, 2.0, 500)  # fm^-3; up to 1.2 the softest EOS had not reached M_max yet
     table = beta_equilibrium(pnm, snm, rho_grid) if beta else thermodynamics(pnm, rho_grid)
@@ -77,6 +78,8 @@ def star_from_fits(pnm, snm, beta, cap=True):
             dlog = np.diff(eps[k:]) / (0.5 * (eps[k:-1] + eps[k + 1:]) + 0.5 * (P[k:-1] + P[k + 1:]))
             rho = rho.copy()
             rho[k + 1:] = rho[k] * np.exp(np.cumsum(dlog))
+    if crust:  # SLy crust (Haensel & Potekhin 2004) below 0.08 fm^-3
+        eps, P, rho, _ = attach_crust(eps, P, rho)
     star = mass_radius(TabulatedEOS(eps, P))
     star["rho_c_max"] = float(np.exp(np.interp(np.log(star["p_c_max"]), np.log(P), np.log(rho))))
     star["capped"] = eps_t is not None and star["p_c_max"] > float(np.interp(eps_t, eps, P))
@@ -96,6 +99,7 @@ def main():
     p.add_argument("--wavefunction", default="basic", choices=("basic", "LS"),
                    help="runs with the basic trial wavefunction or with spin-orbit correlations")
     p.add_argument("--no-causal-cap", action="store_true", help="keep the fit even where c_s^2 > 1")
+    p.add_argument("--no-crust", action="store_true", help="no SLy crust under the core")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="neutron_star", help="name of the figure and the summary file")
     p.add_argument("--format", default="pdf", choices=("pdf", "png", "svg"))
@@ -126,7 +130,7 @@ def main():
                 continue
             snm, _ = fit_snm(rs, Es, es)
 
-        star = star_from_fits(pnm, snm, a.beta, cap=not a.no_causal_cap)
+        star = star_from_fits(pnm, snm, a.beta, cap=not a.no_causal_cap, crust=not a.no_crust)
         boots = []
         for _ in range(a.bootstrap):
             try:
@@ -134,7 +138,7 @@ def main():
                 sb = None
                 if a.beta:
                     sb, _ = fit_snm(rs, Es + es * rng.standard_normal(len(Es)), es, p0=snm.params)
-                boots.append(star_from_fits(pb, sb, a.beta, cap=not a.no_causal_cap))
+                boots.append(star_from_fits(pb, sb, a.beta, cap=not a.no_causal_cap, crust=not a.no_crust))
             except (RuntimeError, ValueError):
                 continue  # failed refit or no star: dropped from the band
         keys = ("M_max", "R_at_Mmax", "R_1.4", "Lambda_1.4", "rho_c_max")

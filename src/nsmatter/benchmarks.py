@@ -27,24 +27,12 @@ POINTS_RHO0 = {  # label -> (E/N, error), 66 neutrons, rho = 0.16
 REFERENCE = "Lovato et al., PRC 105, 055808 (2022)"
 
 
-class AFDMCFit:
-    """A published AFDMC fit as an EOS fit object: fit(rho) -> (E, dE/drho, d2E/drho2), like eos.PNMFit."""
-
-    def __init__(self, coefficients):
-        self.terms = [(c[0], p) for c, p in zip(coefficients, (2 / 3, 1.0, 2.0))]
-
-    def __call__(self, rho):
-        u = np.asarray(rho, dtype=float) / RHO0
-        E = sum(a * u**p for a, p in self.terms)
-        dE = sum(a * p * u ** (p - 1) for a, p in self.terms) / RHO0
-        d2E = sum(a * p * (p - 1) * u ** (p - 2) for a, p in self.terms) / RHO0**2
-        return E, dE, d2E
-
-
 def afdmc_fit(model, three_body):
-    """AFDMCFit for (NV2 model, NV3 model), or None if not published."""
+    """The published AFDMC fit as an eos.PowerFit (E, dE/drho, d2E/drho2), or None if not published."""
+    from .eos import PowerFit
+
     fit = AFDMC_FITS.get((model, three_body))
-    return None if fit is None else AFDMCFit(fit)
+    return None if fit is None else PowerFit([c for c, _ in fit], (2 / 3, 1.0, 2.0), RHO0)
 
 
 def afdmc_energy(model, three_body, rho):
