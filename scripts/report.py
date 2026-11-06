@@ -433,11 +433,26 @@ def error_budget(variants):
              "interaction": float(0.5 * (vals.max() - vals.min())) if len(vals) > 1 else np.nan,
              "fit form": float(np.max([abs(q[key]["fit form"]) for _, q in rows])),
              "crust": float(np.max([abs(q[key]["crust"]) for _, q in rows])),
-             "many-body": float(np.nanmean(mb)) if np.isfinite(mb).any() else np.nan}
-        parts = [c[k] for k in ("stat", "interaction", "fit form", "crust", "many-body")]
+             "many-body": np.nan, "many-body one-sided": False}
+        mb = mb[np.isfinite(mb)]
+        if len(mb):
+            # the largest |shift| over the models; the mean would let opposite shifts cancel.
+            # One-sided (all shifts of the same sign) keeps its sign, otherwise it is a +- band.
+            one_sided = bool(np.all(mb > 0) or np.all(mb < 0))
+            big = float(mb[np.argmax(np.abs(mb))])
+            c["many-body"], c["many-body one-sided"] = (big if one_sided else abs(big)), one_sided
+        parts = [abs(c[k]) for k in ("stat", "interaction", "fit form", "crust", "many-body")]
         c["total"] = float(np.sqrt(np.nansum(np.square(parts))))
         combined[key] = c
     return rows, combined
+
+
+def mb_text(c, d):
+    """The many-body uncertainty: signed if one-sided (same sign for every model), else a +- band."""
+    x = c["many-body"]
+    if not np.isfinite(x):
+        return "-"
+    return f"{x:+.{d}f}" if c["many-body one-sided"] else f"+- {x:.{d}f}"
 
 
 def page_systematics(pdf, variants, colors):
@@ -485,9 +500,9 @@ def page_systematics(pdf, variants, colors):
     top.append(["combined (mean)", *[f"{c[k]['value']:.{d}f}" for k, _, d in QUANTITIES]])
     for src, lab in (("stat", "statistical (VMC)"), ("interaction", "interaction (half range of models)"),
                      ("fit form", "EOS fit form (largest)"), ("crust", "crust (largest)"),
-                     ("many-body", "many-body: AFDMC - VMC (mean)"), ("total", "total (in quadrature)")):
-        top.append([lab, *[("+-" if src != "many-body" else "") + (f"{c[k][src]:.{d}f}" if src != "many-body"
-                                                                   else fmt(c[k][src], d)) for k, _, d in QUANTITIES]])
+                     ("many-body", "many-body: AFDMC - VMC (largest)"), ("total", "total (in quadrature)")):
+        top.append([lab, *[mb_text(c[k], d) if src == "many-body" else f"+- {c[k][src]:.{d}f}"
+                           for k, _, d in QUANTITIES]])
     ax = fig.add_axes([0.04, 0.47, 0.92, 0.45])
     ax.axis("off")
     t = ax.table(cellText=top, colLabels=head, loc="upper center", cellLoc="center",
@@ -829,7 +844,7 @@ def main():
         for key, _, d in QUANTITIES:
             c = combined[key]
             print(f"  {key:11s} {c['value']:8.{d}f} +- {c['stat']:.{d}f} +- {c['interaction']:.{d}f} "
-                  f"+- {c['fit form']:.{d}f} +- {c['crust']:.{d}f}   many-body {c['many-body']:+.{d}f}   "
+                  f"+- {c['fit form']:.{d}f} +- {c['crust']:.{d}f}   many-body {mb_text(c, d)}   "
                   f"total +- {c['total']:.{d}f}")
         summary = pathlib.Path("results/summary") / f"{out.stem}_errors.json"
         summary.parent.mkdir(parents=True, exist_ok=True)

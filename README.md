@@ -475,7 +475,8 @@ changes M_max and Λ₁.₄. `--no-crust` (report.py, neutron_star.py) switches 
 Over the NV2+3 models the combined result is the mean, with the *interaction*
 uncertainty taken as half the spread between the models (the cutoff and fit
 dependence of the Norfolk family), and the other systematics as the largest shift
-over the models (many-body: the mean shift). They are listed separately and added
+over the models (for the many-body shift: with its sign when every model shifts the
+same way, as for E/N, otherwise as a ± band, so that opposite shifts cannot cancel). They are listed separately and added
 in quadrature. Quantities: E/N and P of neutron matter at ρ₀, M_max, R₁.₄, Λ₁.₄.
 
 ---
