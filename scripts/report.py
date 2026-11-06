@@ -150,8 +150,6 @@ def page_overview(pdf, variants, runs, args):
     ]
     for k, ln in enumerate(lines):
         fig.text(0.05, 0.88 - 0.035 * k, ln, fontsize=9.5)
-    ax = fig.add_axes([0.03, 0.04, 0.94, 0.62])
-    ax.axis("off")
     head = ["variant", "rho", "E/N", "kinetic", "potential", "three-body", "FG box - inf", "flags"]
     cells, bad = [], []
     for v in variants:
@@ -164,18 +162,31 @@ def page_overview(pdf, variants, runs, args):
                           f"{r.get('free_gas_box', np.nan) - r.get('free_gas_infinite', np.nan):+.2f}",
                           ", ".join(flags) or "ok"])
             bad.append(bool([x for x in flags if x != "OLD"]))
-    if cells:
-        t = ax.table(cellText=cells, colLabels=head, loc="upper center", cellLoc="center",
-                     colWidths=[0.14, 0.06, 0.13, 0.13, 0.13, 0.13, 0.1, 0.12])
-        t.auto_set_font_size(False)
-        t.set_fontsize(8)
-        t.scale(1, 1.3)
-        for k, b in enumerate(bad, start=1):
-            if b:
-                for col in range(len(head)):
-                    t[k, col].set_facecolor("#fde2e2")
-    pdf.savefig(fig)
-    plt.close(fig)
+    # the table continues on as many pages as needed (fixed row height, never cut at the page bottom)
+    row_h, first, per_page = 0.026, 0.66, 0.90  # figure fractions: row height, top of the table, page 2+
+    start = 0
+    while True:
+        top = first if start == 0 else per_page
+        n = max(1, int((top - 0.03) / row_h) - 1) if cells else 0
+        chunk, chunk_bad = cells[start:start + n], bad[start:start + n]
+        if chunk:
+            ax = fig.add_axes([0.03, top - (len(chunk) + 1) * row_h, 0.94, (len(chunk) + 1) * row_h])
+            ax.axis("off")
+            t = ax.table(cellText=chunk, colLabels=head, bbox=[0, 0, 1, 1], cellLoc="center",
+                         colWidths=[0.14, 0.06, 0.13, 0.13, 0.13, 0.13, 0.1, 0.12])
+            t.auto_set_font_size(False)
+            t.set_fontsize(8)
+            for k, b in enumerate(chunk_bad, start=1):
+                if b:
+                    for col in range(len(head)):
+                        t[k, col].set_facecolor("#fde2e2")
+        pdf.savefig(fig)
+        plt.close(fig)
+        start += n
+        if start >= len(cells):
+            break
+        fig = plt.figure(figsize=A4)
+        fig.text(0.05, 0.94, "VMC runs (continued)", fontsize=12, weight="bold")
 
 
 def page_eos(pdf, variants, colors):
@@ -241,11 +252,63 @@ def thermodynamics_free_gas(rho):
     return 0.6 * HBAR2_2M * kf**2
 
 
+def legend_above_data(ax, ncol=1, fontsize=7.5):
+    """Frameless legend in the upper left, with the y range extended so that it sits above the data."""
+    leg = ax.legend(fontsize=fontsize, ncol=ncol, loc="upper left", frameon=False, handlelength=1.8,
+                    columnspacing=1.0, labelspacing=0.3, borderaxespad=0.3)
+    fig = ax.figure
+    fig.canvas.draw()
+    frac = leg.get_window_extent().height / ax.get_window_extent().height  # legend height / axes height
+    lo, hi = ax.get_ylim()
+    if ax.get_yscale() == "log":
+        return leg
+    ax.set_ylim(lo, hi + (hi - lo) * min(frac, 0.6) / max(1 - min(frac, 0.6), 0.4))
+    return leg
+
+
+def page_channels(pdf, variants, colors):
+    """Every channel of the potential at the lowest, the saturation and the highest computed density."""
+    data = [(v, c, {round(r["density"], 6): r for r in v.recs if "components" in r}) for v, c in zip(variants, colors)]
+    dens = sorted({d for _, _, recs in data for d in recs})
+    if not dens:
+        return
+    picks = sorted({dens[0], min(dens, key=lambda d: abs(d - RHO0)), dens[-1]})
+    chans = [ch for g in GROUPS.values() for ch in g]
+    fig, ax = plt.subplots(1, len(picks), figsize=A4, sharey=True, squeeze=False)
+    ax = ax[0]
+    for a, rho in zip(ax, picks):
+        here = [(v, c, recs[rho]) for v, c, recs in data if rho in recs]
+        width = 0.8 / max(1, len(here))
+        for n, (v, c, rec) in enumerate(here):
+            vals = np.array([rec["components"].get(f"v_{ch}", [np.nan, np.nan]) for ch in chans], dtype=float)
+            a.barh(np.arange(len(chans)) + n * width, vals[:, 0], width, xerr=vals[:, 1], color=c, label=v.name,
+                   error_kw=dict(lw=0.8))
+        a.axvline(0, color="k", lw=0.5)
+        a.set(xlabel=r"$\langle V_p\rangle/N$ (MeV)", title=f"rho = {rho} fm$^{{-3}}$")
+        a.grid(axis="x", lw=0.3, alpha=0.5)
+    ax[0].set_yticks(np.arange(len(chans)) + 0.4 - 0.4 / max(1, len(variants)), chans, fontsize=8)
+    ax[0].invert_yaxis()
+    handles = {}
+    for a in ax:
+        for h, lab in zip(*a.get_legend_handles_labels()):
+            handles.setdefault(lab, h)
+    fig.legend(handles.values(), handles.keys(), loc="lower center", ncol=len(handles), frameon=False, fontsize=8)
+    fig.suptitle(f"Every channel of the potential, NV2-{variants[0].model}: low density, saturation, high density",
+                 fontsize=11)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.97))
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
 QUANTITY_STYLE = {"kinetic": ("^", "--"), "potential": ("v", ":"), "total": ("o", "-")}  # marker, line
 
 
 def page_decomposition(pdf, variants, colors):
-    fig, ax = plt.subplots(2, 2, figsize=A4)
+    fig = plt.figure(figsize=A4)
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.25, 1])
+    ax = np.empty((2, 2), dtype=object)
+    ax[0, 0], ax[0, 1] = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])
+    ax[1, 1] = fig.add_subplot(gs[1, :])
     at_rho0 = []
     labelled = set()  # one legend entry per operator group
     for v, c in zip(variants, colors):
@@ -279,17 +342,6 @@ def page_decomposition(pdf, variants, colors):
     ax[0, 1].axhline(0, color="k", lw=0.5)
     ax[0, 1].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel=r"$\langle V\rangle/N$ (MeV)", title="potential by operator group")
 
-    chans = [c for g in GROUPS.values() for c in g]
-    width = 0.8 / max(1, len(at_rho0))
-    for n, (v, c, rec) in enumerate(at_rho0):
-        vals = np.array([rec["components"].get(f"v_{ch}", [np.nan, np.nan]) for ch in chans], dtype=float)
-        ax[1, 0].barh(np.arange(len(chans)) + n * width, vals[:, 0], width, xerr=vals[:, 1], color=c,
-                      label=f"{v.name}, rho = {rec['density']}")
-    ax[1, 0].set_yticks(np.arange(len(chans)) + 0.4 - width / 2, chans, fontsize=7)
-    ax[1, 0].invert_yaxis()
-    ax[1, 0].axvline(0, color="k", lw=0.5)
-    ax[1, 0].set(xlabel=r"$\langle V_p\rangle/N$ (MeV)", title="every channel near rho0")
-
     ax[1, 1].axis("off")
     if at_rho0:
         keys = ["total", "kinetic", "potential"] + [f"group_{g}" for g in GROUPS]
@@ -304,16 +356,14 @@ def page_decomposition(pdf, variants, colors):
                            + [v.name.replace(" (", "\n(") for v, _, _ in at_rho0], loc="center", cellLoc="center")
         t.auto_set_font_size(False)
         t.set_fontsize(8)
-        t.scale(1, 1.3)
+        t.scale(0.75, 1.25)
         for (row, _), cell in t.get_celld().items():
             if row == 0:  # header: room for the two-line variant names
                 cell.set_height(1.8 * cell.get_height())
-        ax[1, 1].set_title(f"values near rho0 = {RHO0}", fontsize=10)
-    for x in (ax[0, 0], ax[1, 0]):
+        ax[1, 1].set_title(f"values near rho0 = {RHO0} fm^-3 (every channel: next page)", fontsize=10)
+    for x, ncol in ((ax[0, 0], 1), (ax[0, 1], 2)):
         if x.get_legend_handles_labels()[0]:
-            x.legend(fontsize=7.5)
-    if ax[0, 1].get_legend_handles_labels()[0]:
-        ax[0, 1].legend(fontsize=7, ncol=2, loc="upper left")
+            legend_above_data(x, ncol=ncol)
     fig.suptitle(f"Energy decomposition, NV2-{variants[0].model} (in neutron matter only the group sums of c/t and "
                  "s/st are basis-independent)", fontsize=11)
     fig.tight_layout()
@@ -759,6 +809,7 @@ def main():
         for model in dict.fromkeys(v.model for v in variants):  # one page per NV2 model
             sub = [(v, c) for v, c in zip(variants, colors) if v.model == model]
             page_decomposition(pdf, [v for v, _ in sub], [c for _, c in sub])
+            page_channels(pdf, [v for v, _ in sub], [c for _, c in sub])
         page_structure(pdf, variants)
         page_star(pdf, variants, colors)
         page_systematics(pdf, variants, colors)

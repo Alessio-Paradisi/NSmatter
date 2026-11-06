@@ -631,7 +631,8 @@ channel and group; pair distributions and spin correlations (also scaled with k_
 the neutron-star sequence with bootstrap bands, M(ρ_c) and Λ(M); the uncertainty
 pages (EOS and M(R) bands of the models against the AFDMC fits, the error budget
 table and the shift of every model); configuration snapshots; and a quality page for
-every run. The energy decomposition has one page per NV2 model; a variant computed at
+every run. The energy decomposition has one page per NV2 model, followed by a page with every
+channel at the lowest, the saturation and the highest computed density; a variant computed at
 a single density is drawn with open markers and no line. Each run is checked automatically for
 an unconverged optimization (drift), a mismatch between optimization and
 measurement, correlated measurements (τ_int, with the corrected error), badly tuned
