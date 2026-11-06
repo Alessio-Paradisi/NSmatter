@@ -50,7 +50,7 @@ import numpy as np  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from scipy.special import spherical_jn  # noqa: E402
 
-from nsmatter.benchmarks import POINTS_RHO0, REFERENCE, afdmc_energy, afdmc_fit  # noqa: E402
+from nsmatter.benchmarks import AFDMC_RHO_MAX, POINTS_RHO0, REFERENCE, afdmc_energy, afdmc_fit  # noqa: E402
 from nsmatter.eos import (  # noqa: E402
     CRUST_CORE_DENSITY, RHO0, attach_crust, causal_cap, eos_table, fit_pnm, fit_powers, thermodynamics)
 from nsmatter.plotting import draw_walker  # noqa: E402
@@ -170,15 +170,15 @@ def page_eos(pdf, variants, colors):
     rmax = max([v.rho.max() for v in variants if len(v.rho)] + [0.24])
     r_plot = np.linspace(0.01, max(0.5, 1.3 * rmax), 300)
     styles = {}  # line and marker styles used, explained once in the legend
+    # the energy panel shows only the computed range (the extrapolation is on the pressure panels);
+    # finite-size corrections are in the run table (FG box - inf), not drawn here
+    r_near = np.linspace(0.01, 1.06 * rmax, 200)
     for v, c in zip(variants, colors):
         if not len(v.rho):
             continue
         ax[0, 0].errorbar(v.rho, v.E, v.err, fmt="o", color=c, ms=5, label=v.name)
-        if np.isfinite(v.fs_shift).any():
-            ax[0, 0].plot(v.rho, v.E - v.fs_shift, "o", mfc="none", color=c, ms=7, mew=1)
-            styles["fs"] = True
         if v.fit is not None:
-            ax[0, 0].plot(r_plot, v.fit(r_plot)[0], color=c, lw=1.3)
+            ax[0, 0].plot(r_near, v.fit(r_near)[0], color=c, lw=1.3)
             styles["fit"] = True
             dodge = 0.004 * (colors.index(c) - (len(colors) - 1) / 2)  # side by side, not on top of each other
             ax[0, 1].errorbar(v.rho + dodge, (v.E_fit_data - v.fit(v.rho)[0]) / v.err, 1, fmt="o", ms=4, color=c,
@@ -186,25 +186,26 @@ def page_eos(pdf, variants, colors):
             th = thermodynamics(v.fit, r_plot)
             ax[1, 0].plot(r_plot, th["P"], color=c, lw=1.6, label=v.name)
             ax[1, 1].plot(r_plot, th["cs2"], color=c, lw=1.6, label=v.name)
-        bench = afdmc_energy(v.model, v.three_body, r_plot) if v.wavefunction == "basic" else None
+        r_afdmc = r_near[r_near <= AFDMC_RHO_MAX]  # only where AFDMC was computed, not its extrapolation
+        bench = afdmc_energy(v.model, v.three_body, r_afdmc) if v.wavefunction == "basic" else None
         if bench is not None:  # once per interaction, not again for the LS-correlated variant
-            ax[0, 0].plot(r_plot, bench, color=c, ls="--", lw=1.3)
+            ax[0, 0].plot(r_afdmc, bench, color=c, ls="--", lw=1.3)
             styles["afdmc"] = True
         for e, de in POINTS_RHO0.get((v.model, v.three_body), {}).values():
             ax[0, 0].errorbar([RHO0], [e], [de], fmt="s", mfc="none", ms=7, mew=1, color=c)
             styles["points"] = True
-    fg = thermodynamics_free_gas(r_plot)
-    ax[0, 0].plot(r_plot, fg, color="gray", ls="-.", lw=1.2, label="free Fermi gas")
+    fg = thermodynamics_free_gas(r_near)
+    ax[0, 0].plot(r_near, fg, color="gray", ls="-.", lw=1.2)
+    style_handles = [ax[0, 0].plot([], [], color="gray", ls="-.", lw=1.2, label="free Fermi gas")[0]]
     for key, kw, lab in (("fit", dict(color="k", lw=1.3), "solid: fit to the VMC points"),
-                         ("fs", dict(color="k", marker="o", mfc="none", ls="none", ms=7), "open circles: finite-size corrected"),
-                         ("afdmc", dict(color="k", ls="--", lw=1.3), f"dashed: AFDMC fit ({REFERENCE.split(',')[0]})"),
+                         ("afdmc", dict(color="k", ls="--", lw=1.3), f"dashed: AFDMC ({REFERENCE.split(',')[0]}), rho <= {AFDMC_RHO_MAX}"),
                          ("points", dict(color="k", marker="s", mfc="none", ls="none", ms=7),
                           "open squares: published 66-n values")):
         if styles.get(key):
-            ax[0, 0].plot([], [], label=lab, **kw)
+            style_handles.append(ax[0, 0].plot([], [], label=lab, **kw)[0])
     top = max([v.E.max() for v in variants if len(v.E)] + [10.0])
     ax[0, 0].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel="E/N (MeV)", title="energy per neutron",
-                 xlim=(0, 1.35 * rmax), ylim=(0, 1.5 * top))
+                 xlim=(0, 1.06 * rmax), ylim=(0, 1.08 * top))
     ax[0, 1].axhline(0, color="k", lw=0.5)
     ax[0, 1].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel="(data - fit) / error", title="fit residuals")
     for x in (ax[1, 0], ax[1, 1]):
@@ -213,9 +214,16 @@ def page_eos(pdf, variants, colors):
     ax[1, 0].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel=r"P (MeV fm$^{-3}$)", yscale="log", title="pressure (fit)")
     ax[1, 1].axhline(1, color="r", lw=0.8, ls=":")
     ax[1, 1].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel=r"$c_s^2$", ylim=(0, 1.3), title="speed of sound (fit)")
-    for x in ax.flat:
+    for x in ax.flat[1:]:
         if x.get_legend_handles_labels()[0]:
             x.legend(fontsize=8)
+    # two frameless legends in the two empty corners: models top left, line styles bottom right
+    models = [(h, lab) for h, lab in zip(*ax[0, 0].get_legend_handles_labels()) if h not in style_handles]
+    first = ax[0, 0].legend([h for h, _ in models], [lab for _, lab in models], fontsize=8, loc="upper left",
+                            frameon=False, labelspacing=0.3)
+    ax[0, 0].add_artist(first)
+    ax[0, 0].legend(style_handles, [h.get_label() for h in style_handles], fontsize=7.5, loc="lower right",
+                    frameon=False, labelspacing=0.3)
     fig.suptitle("Equation of state of pure neutron matter", fontsize=13)
     fig.tight_layout()
     pdf.savefig(fig)
@@ -479,7 +487,7 @@ def page_systematics(pdf, variants, colors):
         ref = afdmc_star(v)
         if ref is not None:
             ax[1].plot(ref["R"], ref["M"], color=color[id(v)], lw=1, ls="--")
-    ax[1].plot([], [], color="gray", ls="--", lw=1, label="AFDMC fit, same model")
+    ax[1].plot([], [], color="gray", ls="--", lw=1, label=f"AFDMC fit, same model\n(extrapolated beyond {AFDMC_RHO_MAX} fm$^{{-3}}$)")
     ax[1].axhline(2.0, color="gray", ls=":", lw=1)
     ax[1].set(xlabel="R (km)", ylabel=r"M (M$_\odot$)", xlim=(8, 16), ylim=(0, 2.8),
               title="mass-radius: models (colours) and method (solid/dashed)")
@@ -532,7 +540,8 @@ def page_systematics(pdf, variants, colors):
         if row == 0:
             cell.set_height(1.7 * cell.get_height())
     ax.set_title("systematic shifts per model (alternative minus default; many-body: AFDMC fit minus VMC, '-' if not "
-                 "published)", fontsize=9)
+                 f"published;\nfor the stars the AFDMC fit is extrapolated beyond {AFDMC_RHO_MAX} fm^-3, ours beyond the "
+                 "largest computed density)", fontsize=9)
     pdf.savefig(fig)
     plt.close(fig)
 

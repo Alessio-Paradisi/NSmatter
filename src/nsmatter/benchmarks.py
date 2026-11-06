@@ -27,6 +27,9 @@ POINTS_RHO0 = {  # label -> (E/N, error), 66 neutrons, rho = 0.16
 REFERENCE = "Lovato et al., PRC 105, 055808 (2022)"
 
 
+AFDMC_RHO_MAX = 0.32  # fm^-3: the AFDMC calculations go up to 2 rho0; beyond, the fit is an extrapolation
+
+
 def afdmc_fit(model, three_body):
     """The published AFDMC fit as an eos.PowerFit (E, dE/drho, d2E/drho2), or None if not published."""
     from .eos import PowerFit
