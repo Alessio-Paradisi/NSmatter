@@ -162,31 +162,7 @@ def page_overview(pdf, variants, runs, args):
                           f"{r.get('free_gas_box', np.nan) - r.get('free_gas_infinite', np.nan):+.2f}",
                           ", ".join(flags) or "ok"])
             bad.append(bool([x for x in flags if x != "OLD"]))
-    # the table continues on as many pages as needed (fixed row height, never cut at the page bottom)
-    row_h, first, per_page = 0.026, 0.66, 0.90  # figure fractions: row height, top of the table, page 2+
-    start = 0
-    while True:
-        top = first if start == 0 else per_page
-        n = max(1, int((top - 0.03) / row_h) - 1) if cells else 0
-        chunk, chunk_bad = cells[start:start + n], bad[start:start + n]
-        if chunk:
-            ax = fig.add_axes([0.03, top - (len(chunk) + 1) * row_h, 0.94, (len(chunk) + 1) * row_h])
-            ax.axis("off")
-            t = ax.table(cellText=chunk, colLabels=head, bbox=[0, 0, 1, 1], cellLoc="center",
-                         colWidths=[0.14, 0.06, 0.13, 0.13, 0.13, 0.13, 0.1, 0.12])
-            t.auto_set_font_size(False)
-            t.set_fontsize(8)
-            for k, b in enumerate(chunk_bad, start=1):
-                if b:
-                    for col in range(len(head)):
-                        t[k, col].set_facecolor("#fde2e2")
-        pdf.savefig(fig)
-        plt.close(fig)
-        start += n
-        if start >= len(cells):
-            break
-        fig = plt.figure(figsize=A4)
-        fig.text(0.05, 0.94, "VMC runs (continued)", fontsize=12, weight="bold")
+    paged_table(pdf, fig, 0.66, cells, head, [0.14, 0.06, 0.13, 0.13, 0.13, 0.13, 0.1, 0.12], bad)
 
 
 def page_eos(pdf, variants, colors):
@@ -737,25 +713,42 @@ def run_page(pdf, rec, a):
 
 
 def summary_page(pdf, rows):
-    fig, ax = plt.subplots(figsize=(11.7, 8.3))
-    ax.axis("off")
+    fig = plt.figure(figsize=A4)
+    fig.text(0.5, 0.95, "VMC run quality (flags: see the report.py docstring)", fontsize=12, ha="center")
     head = ["run", "E/N", "err", "err corr.", "tau", "opt. end", "drift", "flags"]
     cells = [[label(r).replace("  ", " "), f"{r['E_per_N']:.3f}", f"{r['error']:.3f}",
               f"{a['err_corr']:.3f}", f"{a['tau']:.2f}", f"{a['opt_end']:.2f}", f"{a['drift']:+.2f}",
               ", ".join(a["flags"]) or "ok"] for r, a in rows]
-    table = ax.table(cellText=cells, colLabels=head, loc="upper center", cellLoc="center",
-                     colWidths=[0.36, 0.08, 0.07, 0.08, 0.06, 0.08, 0.07, 0.2])
-    table.auto_set_font_size(False)
-    table.set_fontsize(8)
-    table.scale(1, 1.4)
-    for k, (_, a) in enumerate(rows, start=1):
-        bad = [f for f in a["flags"] if f != "OLD"]
-        if bad:
-            for c in range(len(head)):
-                table[k, c].set_facecolor("#fde2e2")
-    ax.set_title("VMC run quality (flags: see the report.py docstring)", fontsize=12)
-    pdf.savefig(fig)
-    plt.close(fig)
+    bad = [bool([f for f in a["flags"] if f != "OLD"]) for _, a in rows]
+    paged_table(pdf, fig, 0.92, cells, head, [0.36, 0.08, 0.07, 0.08, 0.06, 0.08, 0.07, 0.2], bad)
+
+
+def paged_table(pdf, fig, top, cells, head, widths, bad, row_h=0.026):
+    """A table with a fixed row height, continued on new pages (header repeated) instead of being cut.
+
+    fig: the first page, already holding whatever goes above the table; top: where the table starts on it
+    (figure fraction). Rows with bad[k] are shaded. Saves and closes every page.
+    """
+    start = 0
+    while True:
+        n = max(1, int((top - 0.03) / row_h) - 1)
+        chunk, chunk_bad = cells[start:start + n], bad[start:start + n]
+        if chunk:
+            ax = fig.add_axes([0.03, top - (len(chunk) + 1) * row_h, 0.94, (len(chunk) + 1) * row_h])
+            ax.axis("off")
+            t = ax.table(cellText=chunk, colLabels=head, bbox=[0, 0, 1, 1], cellLoc="center", colWidths=widths)
+            t.auto_set_font_size(False)
+            t.set_fontsize(8)
+            for k, b in enumerate(chunk_bad, start=1):
+                if b:
+                    for col in range(len(head)):
+                        t[k, col].set_facecolor("#fde2e2")
+        pdf.savefig(fig)
+        plt.close(fig)
+        start += n
+        if start >= len(cells):
+            return
+        fig, top = plt.figure(figsize=A4), 0.95
 
 
 def main():
