@@ -60,6 +60,7 @@ from nsmatter.tov import TabulatedEOS, mass_radius  # noqa: E402
 PNM = (7, 7, 0, 0)
 A4 = (11.7, 8.3)
 RHO_TABLE_MAX = 2.0  # fm^-3, end of the EOS table for the stars
+R_MIN_PLOT = 0.15  # fm, pair-distribution bins below this are not plotted (too few pairs)
 
 
 # =============================================================================
@@ -180,8 +181,8 @@ def page_eos(pdf, variants, colors):
             th = thermodynamics(v.fit, r_plot)
             ax[1, 0].plot(r_plot, th["P"], color=c, label=v.name)
             ax[1, 1].plot(r_plot, th["cs2"], color=c, label=v.name)
-        bench = afdmc_energy(v.model, v.three_body, r_plot)
-        if bench is not None:
+        bench = afdmc_energy(v.model, v.three_body, r_plot) if v.wavefunction == "basic" else None
+        if bench is not None:  # once per interaction, not again for the LS-correlated variant
             ax[0, 0].plot(r_plot, bench, color=c, ls="--", lw=1, label=f"AFDMC {v.name} ({REFERENCE.split(',')[0]})")
         for k, (e, de) in enumerate(POINTS_RHO0.get((v.model, v.three_body), {}).values()):
             ax[0, 0].errorbar([RHO0], [e], [de], fmt="s", mfc="none", ms=6, color=c, alpha=0.7,
@@ -261,11 +262,14 @@ def page_decomposition(pdf, variants, colors):
                 m = rec["components"].get(k)
                 row.append(f"{m[0]:.2f} +- {m[1]:.2f}" if m else "-")
             cells.append(row)
-        t = ax[1, 1].table(cellText=cells, colLabels=["per neutron (MeV)"] + [v.name for v, _, _ in at_rho0],
-                           loc="center", cellLoc="center")
+        t = ax[1, 1].table(cellText=cells, colLabels=["per neutron (MeV)"]
+                           + [v.name.replace(" (", "\n(") for v, _, _ in at_rho0], loc="center", cellLoc="center")
         t.auto_set_font_size(False)
         t.set_fontsize(8)
         t.scale(1, 1.3)
+        for (row, _), cell in t.get_celld().items():
+            if row == 0:  # header: room for the two-line variant names
+                cell.set_height(1.8 * cell.get_height())
         ax[1, 1].set_title(f"values near rho0 = {RHO0}", fontsize=10)
     for x in (ax[0, 0], ax[0, 1], ax[1, 0]):
         if x.get_legend_handles_labels()[0]:
@@ -286,6 +290,11 @@ def page_structure(pdf, variants):
         col = cmap(n / max(1, len(recs) - 1))
         r, g = structure(rec, "g")
         _, cs = structure(rec, "C_sigma")
+        # the first bins (r < R_MIN_PLOT) hold a handful of pairs in a tiny volume: pure noise
+        far = r >= R_MIN_PLOT
+        r = r[far]
+        g = {c: (m[far], e[far]) for c, (m, e) in g.items()}
+        cs = {c: (m[far], e[far]) for c, (m, e) in cs.items()}
         kf = (3 * np.pi**2 * rec["density"]) ** (1 / 3)
         lab = f"rho = {rec['density']}"
         ax[0, 0].errorbar(r, g["nn"][0], g["nn"][1], color=col, lw=1.2, label=lab)
