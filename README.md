@@ -632,7 +632,7 @@ the neutron-star sequence with bootstrap bands, M(ρ_c) and Λ(M); the uncertain
 pages (EOS and M(R) bands of the models against the AFDMC fits, the error budget
 table and the shift of every model); configuration snapshots; and a quality page for
 every run. The energy decomposition has one page per NV2 model; a variant computed at
-a single density is drawn as star markers. Each run is checked automatically for
+a single density is drawn with open markers and no line. Each run is checked automatically for
 an unconverged optimization (drift), a mismatch between optimization and
 measurement, correlated measurements (τ_int, with the corrected error), badly tuned
 step sizes and the total spin.

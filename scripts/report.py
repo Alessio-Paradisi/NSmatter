@@ -182,26 +182,39 @@ def page_eos(pdf, variants, colors):
     fig, ax = plt.subplots(2, 2, figsize=A4)
     rmax = max([v.rho.max() for v in variants if len(v.rho)] + [0.24])
     r_plot = np.linspace(0.01, max(0.5, 1.3 * rmax), 300)
+    styles = {}  # line and marker styles used, explained once in the legend
     for v, c in zip(variants, colors):
         if not len(v.rho):
             continue
-        ax[0, 0].errorbar(v.rho, v.E, v.err, fmt="o", color=c, ms=4, label=f"VMC {v.name}")
+        ax[0, 0].errorbar(v.rho, v.E, v.err, fmt="o", color=c, ms=5, label=v.name)
         if np.isfinite(v.fs_shift).any():
-            ax[0, 0].plot(v.rho, v.E - v.fs_shift, "o", mfc="none", color=c, ms=5, label=f"{v.name}, FS-corrected")
+            ax[0, 0].plot(v.rho, v.E - v.fs_shift, "o", mfc="none", color=c, ms=7, mew=1)
+            styles["fs"] = True
         if v.fit is not None:
-            ax[0, 0].plot(r_plot, v.fit(r_plot)[0], color=c, lw=1)
-            ax[0, 1].errorbar(v.rho, (v.E_fit_data - v.fit(v.rho)[0]) / v.err, 1, fmt="o", color=c, label=v.name)
+            ax[0, 0].plot(r_plot, v.fit(r_plot)[0], color=c, lw=1.3)
+            styles["fit"] = True
+            dodge = 0.004 * (colors.index(c) - (len(colors) - 1) / 2)  # side by side, not on top of each other
+            ax[0, 1].errorbar(v.rho + dodge, (v.E_fit_data - v.fit(v.rho)[0]) / v.err, 1, fmt="o", ms=4, color=c,
+                              label=v.name)
             th = thermodynamics(v.fit, r_plot)
-            ax[1, 0].plot(r_plot, th["P"], color=c, label=v.name)
-            ax[1, 1].plot(r_plot, th["cs2"], color=c, label=v.name)
+            ax[1, 0].plot(r_plot, th["P"], color=c, lw=1.6, label=v.name)
+            ax[1, 1].plot(r_plot, th["cs2"], color=c, lw=1.6, label=v.name)
         bench = afdmc_energy(v.model, v.three_body, r_plot) if v.wavefunction == "basic" else None
         if bench is not None:  # once per interaction, not again for the LS-correlated variant
-            ax[0, 0].plot(r_plot, bench, color=c, ls="--", lw=1, label=f"AFDMC {v.name} ({REFERENCE.split(',')[0]})")
-        for k, (e, de) in enumerate(POINTS_RHO0.get((v.model, v.three_body), {}).values()):
-            ax[0, 0].errorbar([RHO0], [e], [de], fmt="s", mfc="none", ms=6, color=c, alpha=0.7,
-                              label=f"published 66-n values, {v.name}" if k == 0 else None)
+            ax[0, 0].plot(r_plot, bench, color=c, ls="--", lw=1.3)
+            styles["afdmc"] = True
+        for e, de in POINTS_RHO0.get((v.model, v.three_body), {}).values():
+            ax[0, 0].errorbar([RHO0], [e], [de], fmt="s", mfc="none", ms=7, mew=1, color=c)
+            styles["points"] = True
     fg = thermodynamics_free_gas(r_plot)
-    ax[0, 0].plot(r_plot, fg, color="gray", ls="-.", lw=1, label="free Fermi gas")
+    ax[0, 0].plot(r_plot, fg, color="gray", ls="-.", lw=1.2, label="free Fermi gas")
+    for key, kw, lab in (("fit", dict(color="k", lw=1.3), "solid: fit to the VMC points"),
+                         ("fs", dict(color="k", marker="o", mfc="none", ls="none", ms=7), "open circles: finite-size corrected"),
+                         ("afdmc", dict(color="k", ls="--", lw=1.3), f"dashed: AFDMC fit ({REFERENCE.split(',')[0]})"),
+                         ("points", dict(color="k", marker="s", mfc="none", ls="none", ms=7),
+                          "open squares: published 66-n values")):
+        if styles.get(key):
+            ax[0, 0].plot([], [], label=lab, **kw)
     top = max([v.E.max() for v in variants if len(v.E)] + [10.0])
     ax[0, 0].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel="E/N (MeV)", title="energy per neutron",
                  xlim=(0, 1.35 * rmax), ylim=(0, 1.5 * top))
@@ -215,7 +228,7 @@ def page_eos(pdf, variants, colors):
     ax[1, 1].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel=r"$c_s^2$", ylim=(0, 1.3), title="speed of sound (fit)")
     for x in ax.flat:
         if x.get_legend_handles_labels()[0]:
-            x.legend(fontsize=7)
+            x.legend(fontsize=8)
     fig.suptitle("Equation of state of pure neutron matter", fontsize=13)
     fig.tight_layout()
     pdf.savefig(fig)
@@ -228,6 +241,9 @@ def thermodynamics_free_gas(rho):
     return 0.6 * HBAR2_2M * kf**2
 
 
+QUANTITY_STYLE = {"kinetic": ("^", "--"), "potential": ("v", ":"), "total": ("o", "-")}  # marker, line
+
+
 def page_decomposition(pdf, variants, colors):
     fig, ax = plt.subplots(2, 2, figsize=A4)
     at_rho0 = []
@@ -237,27 +253,28 @@ def page_decomposition(pdf, variants, colors):
         if not recs:
             continue
         rho = np.array([r["density"] for r in recs])
-        single = len(rho) == 1  # one density only: big star markers, no lines
+        single = len(rho) == 1  # one density only: open markers, no lines
         note = f" (rho = {rho[0]} only)" if single else ""
-        for key, ls in (("kinetic", "--"), ("potential", ":"), ("total", "-")):
+        open_ = dict(mfc="white", mew=1.3, ms=7) if single else dict(ms=5)
+        for key, (mk, ls) in QUANTITY_STYLE.items():
             m, e = component(recs, key)
-            label = f"{key} {v.name}" if not single else (
-                f"kinetic, potential, total {v.name}{note}" if key == "total" else None)
-            ax[0, 0].errorbar(rho, m, e, fmt="*" if single else "o" + ls, color=c, ms=10 if single else 4, lw=1,
-                              label=label)
+            ax[0, 0].errorbar(rho, m, e, marker=mk, ls="none" if single else ls, color=c, lw=1.3, **open_)
+        ax[0, 0].plot([], [], color=c, lw=6, label=f"{v.name}{note}")
         ls = "none" if single else ["-", "--", ":", "-."][colors.index(c) % 4]
         for k, g in enumerate(GROUPS):
             m, e = component(recs, f"group_{g}")
             if np.all(np.isnan(m)):
                 continue
-            ax[0, 1].errorbar(rho, m, e, fmt="*" if single else "os^vDP"[k % 6], ls=ls, color=f"C{k}",
-                              ms=10 if single else 4, lw=1, label=g if g not in labelled else None)
+            ax[0, 1].errorbar(rho, m, e, marker="os^vDP"[k % 6], ls=ls, color=f"C{k}", lw=1.3, **open_,
+                              label=g if g not in labelled else None)
             labelled.add(g)
         if single:
-            ax[0, 1].plot([], [], "*", color="k", ms=8, label=f"star: {v.name}{note}")
+            ax[0, 1].plot([], [], "o", mfc="white", mec="k", ms=7, ls="none", label=f"open markers: {v.name}{note}")
         else:
-            ax[0, 1].plot([], [], ls=ls, color="k", label=f"line: {v.name}")
+            ax[0, 1].plot([], [], ls=ls, color="k", lw=1.3, label=f"line: {v.name}")
         at_rho0.append((v, c, recs[int(np.argmin(np.abs(rho - RHO0)))]))
+    for key, (mk, ls) in QUANTITY_STYLE.items():
+        ax[0, 0].plot([], [], color="k", marker=mk, ls=ls, lw=1.3, ms=5, label=key)
     ax[0, 0].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel="MeV per neutron", title="kinetic and potential energy")
     ax[0, 1].axhline(0, color="k", lw=0.5)
     ax[0, 1].set(xlabel=r"$\rho$ (fm$^{-3}$)", ylabel=r"$\langle V\rangle/N$ (MeV)", title="potential by operator group")
@@ -292,9 +309,11 @@ def page_decomposition(pdf, variants, colors):
             if row == 0:  # header: room for the two-line variant names
                 cell.set_height(1.8 * cell.get_height())
         ax[1, 1].set_title(f"values near rho0 = {RHO0}", fontsize=10)
-    for x in (ax[0, 0], ax[0, 1], ax[1, 0]):
+    for x in (ax[0, 0], ax[1, 0]):
         if x.get_legend_handles_labels()[0]:
-            x.legend(fontsize=6.5)
+            x.legend(fontsize=7.5)
+    if ax[0, 1].get_legend_handles_labels()[0]:
+        ax[0, 1].legend(fontsize=7, ncol=2, loc="upper left")
     fig.suptitle(f"Energy decomposition, NV2-{variants[0].model} (in neutron matter only the group sums of c/t and "
                  "s/st are basis-independent)", fontsize=11)
     fig.tight_layout()
