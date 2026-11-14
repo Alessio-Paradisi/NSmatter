@@ -559,10 +559,19 @@ packages; only an NVIDIA driver is needed on the machine.
 
 ### Hardware
 
-Jastrow–Slater calculations of a few tens of nucleons run on a single workstation GPU
-or on a CPU. Operator-correlated wavefunctions at N = 28–66 and density scans for four
-models benefit from data-centre GPUs with fast double-precision arithmetic; the code
-scales to several GPUs by sharding the walkers.
+The production runs use the CPU cores of one workstation (12 cores, 30 GB), one walker
+chunk per core. **JAX runs on the CPU by default** (`JAX_PLATFORMS=cpu`, set by the
+package): on workstation GPUs such as the NVIDIA T1000, double precision is slow and
+complex128 matrix products can fail. Set `JAX_PLATFORMS=cuda` explicitly to try a
+data-centre GPU.
+
+**Cost against particle number.** With operator correlations [1 + Σ U_ij] every pair
+move updates an N × N matrix, and the local energy needs a move per pair, so one local
+energy costs ∝ N⁴. Measured (one core, NV2+3-Ia\*, ρ₀): 0.35 s for 14 neutrons, 16.5 s
+for 38, 140 s for 66, i.e. a production point takes about 40 min, 1.3 days and 11 days
+on 12 cores. Beyond about 20 nucleons the pair sums must go in chunks,
+`run_nv2.py --pair-chunk 16` (memory per walker 1.3 GB at N = 38, 2.7 GB at N = 66;
+results identical, tested).
 
 ---
 

@@ -47,6 +47,7 @@ def _cpu_devices_from_argv():
     return len(os.sched_getaffinity(0))
 
 
+os.environ.setdefault("JAX_PLATFORMS", "cpu")  # see nsmatter/__init__.py
 os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "")
                            + f" --xla_force_host_platform_device_count={_cpu_devices_from_argv()}")
 
@@ -55,6 +56,7 @@ import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
 import nsmatter  # noqa: F401, E402  (float64)
+from nsmatter.hamiltonian.pair_operators import set_pair_chunk  # noqa: E402
 from nsmatter.local_energy import make_local_energy, make_local_energy_components  # noqa: E402
 from nsmatter.observables import CLASSES, make_pair_observables, normalize, spin_vectors  # noqa: E402
 from nsmatter.optimize import apply_update, log_derivatives_spin, sr_direction  # noqa: E402
@@ -94,11 +96,14 @@ def parse_args():
     p.add_argument("--bins", type=int, default=40, help="distance bins for g(r), C(r) (up to L/2)")
     p.add_argument("--track", type=int, default=4, help="walkers whose trajectory is saved (animations)")
     p.add_argument("--out", default="results/nv2_vmc.jsonl")
+    p.add_argument("--pair-chunk", type=int, default=None,
+                   help="evaluate the pair sums in chunks of this many pairs (memory; needed beyond ~20 neutrons)")
     return p.parse_args()
 
 
 def main():
     a = parse_args()
+    set_pair_chunk(a.pair_chunk)
     if a.batch is None:  # spin-orbit correlations need about 1.8 GB per walker in flight
         a.batch = 1 if a.spin_orbit_corr else 4
     system = System(a.n_up, a.n_down, a.p_up, a.p_down, a.density)

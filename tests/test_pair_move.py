@@ -70,3 +70,21 @@ def test_energy_components_add_up():
     total = make_local_energy(log_psi, (static, mom))(params, r, xi, t)
     assert set(comps) == {"kinetic"} | {f"v_{c}" for c in (*STATIC_CHANNELS, *MOMENTUM_CHANNELS)}
     assert np.isclose(sum(comps.values()), total, rtol=1e-12)
+
+
+def test_pair_chunks_do_not_change_results():
+    """map_pairs in chunks (with and without padding) = all pairs at once, also with spin-orbit correlations."""
+    from nsmatter.hamiltonian import pair_operators
+
+    for system in SYSTEMS:
+        params, log_psi, r, xi, t = setup(system)
+        static = make_static_potential(system, {ch: ((10.0 + k, 0.8 + 0.1 * k),) for k, ch in enumerate(STATIC_CHANNELS)})
+        mom = make_momentum_potential(system, {ch: ((5.0 + k, 0.9),) for k, ch in enumerate(MOMENTUM_CHANNELS)})
+        try:
+            ref = [complex(term(log_psi, params, r, xi, t)) for term in (static, mom)]
+            for chunk in (7, 10):  # 7 divides the 91 pairs of 14 particles, 10 does not (padding)
+                pair_operators.set_pair_chunk(chunk)
+                got = [complex(term(log_psi, params, r, xi, t)) for term in (static, mom)]
+                assert np.allclose(got, ref, rtol=1e-12), (chunk, got, ref)
+        finally:
+            pair_operators.set_pair_chunk(None)

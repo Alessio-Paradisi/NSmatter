@@ -33,7 +33,7 @@ import numpy as np
 from ..geometry import minimum_image
 from ..spin import as_spinors
 from ..system import System
-from .pair_operators import DOT, PAULI, SWAPPING, has_both_species, isospin_factors
+from .pair_operators import DOT, PAULI, SWAPPING, has_both_species, isospin_factors, map_pairs
 from .radial import as_radial, image_vectors
 
 EYE2 = jnp.eye(2, dtype=jnp.complex128)
@@ -140,7 +140,8 @@ def make_momentum_potential(system: System, radial: dict):
                 return jet(f)
 
         over_targets = jax.vmap(derivatives, in_axes=(None, None, 0, 0, None, None))  # 4 spin targets
-        over_pairs = jax.vmap(over_targets, in_axes=(0, 0, 0, 0, 0, 0))
+        def over_pairs(*args):  # all pairs, in chunks if pair_operators.PAIR_CHUNK is set
+            return map_pairs(over_targets, *args)
 
         def l_parts(lp, g, K):
             """Ratio and L-operator values at the targets, per active channel."""

@@ -171,6 +171,34 @@ def make_static_potential(system: System, radial: dict):
     return term
 
 
+# Pairs evaluated at once in the pair loops (pair_targets, momentum.py). None: all
+# pairs in one vectorized call (fastest; fine for 14 neutrons). For larger systems
+# the memory of one call grows like N^4, so the pairs go in chunks of PAIR_CHUNK
+# (jax.lax.map over chunks, vmap inside). Set with set_pair_chunk(), e.g. by
+# run_nv2.py --pair-chunk. Results do not depend on it.
+PAIR_CHUNK = None
+
+
+def set_pair_chunk(chunk):
+    global PAIR_CHUNK
+    PAIR_CHUNK = None if not chunk else int(chunk)
+
+
+def map_pairs(f, *args):
+    """vmap(f) over the leading (pair) axis of args, in chunks of PAIR_CHUNK pairs."""
+    n = args[0].shape[0]
+    if PAIR_CHUNK is None or n <= PAIR_CHUNK:
+        return jax.vmap(f)(*args)
+    c = PAIR_CHUNK
+    n_chunks = -(-n // c)
+    pad = n_chunks * c - n
+    # padding repeats the first pair (a valid pair, so no division by zero); it is cut off below
+    padded = [jnp.concatenate([x, jnp.repeat(x[:1], pad, axis=0)]) if pad else x for x in args]
+    chunks = [x.reshape((n_chunks, c) + x.shape[1:]) for x in padded]
+    out = jax.lax.map(lambda xs: jax.vmap(f)(*xs), tuple(chunks))
+    return jax.tree_util.tree_map(lambda y: y.reshape((n_chunks * c,) + y.shape[2:])[:n], out)
+
+
 def pair_targets(log_psi, params, r, s, t, i, j, needs_swap=True):
     """Spin targets of every pair (i, j) and the wavefunction ratios Psi(target) / Psi.
 
@@ -209,9 +237,10 @@ def pair_targets(log_psi, params, r, s, t, i, j, needs_swap=True):
         def ratio(p_i, p_j, e_i, e_j, t_i, t_j):
             return move(params, cache, p_i, p_j, u0, e_i, e_j, t_i, t_j)
 
-        over_pairs = jax.vmap(jax.vmap(ratio, in_axes=(None, None, 0, 0, None, None)))
-        rho_same = jnp.exp(over_pairs(i, j, eta_i, eta_j, t[i], t[j]))
-        rho_swap = jnp.exp(over_pairs(i, j, eta_i, eta_j, t[j], t[i])) if needs_swap else jnp.zeros_like(rho_same)
+        over_targets = jax.vmap(ratio, in_axes=(None, None, 0, 0, None, None))
+        rho_same = jnp.exp(map_pairs(over_targets, i, j, eta_i, eta_j, t[i], t[j]))
+        rho_swap = (jnp.exp(map_pairs(over_targets, i, j, eta_i, eta_j, t[j], t[i])) if needs_swap
+                    else jnp.zeros_like(rho_same))
     else:
         def spin_targets(p_i, p_j, e_i, e_j):
             return jax.vmap(lambda a, b: xi.at[p_i].set(a).at[p_j].set(b))(e_i, e_j)
