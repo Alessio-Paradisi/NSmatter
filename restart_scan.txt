@@ -1,3 +1,0 @@
-python scripts/eos_scan.py --models Ib --densities 0.32 0.40 0.48 --out results/vmc_Ib.jsonl \
-python scripts/eos_scan.py --models Ib --densities 0.32 0.40 0.48 --out results/vmc_Ib.jsonl \
- 1952  history | grep eos_scan | tail -3 > restart_scan.txt

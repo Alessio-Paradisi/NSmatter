@@ -6,29 +6,13 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
-.venv
-__pycache__/
+# Virtual environments and tool caches
 .venv/
 .pytest_cache/
-*.npz
-__pycache__/
-.venv/
-.pytest_cache/
-*.npz
-__pycache__/
-.venv/
-.pytest_cache/
-*.npz
-__pycache__/
-.venv/
-.pytest_cache/
-*.npz
-__pycache__/
-.venv/
-.pytest_cache/
+
+# Large or regenerable run outputs
 *.npz
 results/configs/
 results/logs/
 scan_*.log
-__pycache__/
+restart_scan.txt
